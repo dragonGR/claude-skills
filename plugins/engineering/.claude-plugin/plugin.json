@@ -1,0 +1,21 @@
+{
+  "name": "engineering",
+  "description": "Security, smart contracts, backend, database, infrastructure, Node.js, language, frontend, testing, performance and writing skills written for production work.",
+  "author": {
+    "name": "Alex Tsanis",
+    "url": "https://github.com/dragonGR"
+  },
+  "repository": "https://github.com/dragonGR/claude-skills",
+  "license": "MIT",
+  "keywords": [
+    "security",
+    "solidity",
+    "polygon",
+    "nodejs",
+    "backend",
+    "database",
+    "frontend",
+    "testing",
+    "writing"
+  ]
+}
