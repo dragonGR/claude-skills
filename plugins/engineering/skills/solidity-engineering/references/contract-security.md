@@ -67,7 +67,7 @@ contract RewardClaims is EIP712 {
 
 Why each piece is there:
 
-- The domain (`name`, `version`, `chainId`, `verifyingContract`) binds the signature to this contract on this chain. OpenZeppelin's `EIP712` recomputes the separator if the chain id changes after deployment (a fork), which a hand-cached immutable separator does not.
+- The domain (`name`, `version`, `chainId`, `verifyingContract`) binds the signature to this contract on this chain. OpenZeppelin's `EIP712` recomputes the separator if the chain id changes after deployment (a fork), which a hand-cached immutable separator does not. From OpenZeppelin 5.7, `name` and `version` must each fit in 31 bytes or the constructor reverts with `ShortStrings.StringTooLong`; earlier versions fell back to storage, which a proxy or clone without an initializer never set.
 - One typehash per action. Two functions that accept structurally identical messages under the same domain can be fed each other's signatures.
 - `ECDSA.recover` reverts on invalid signatures and rejects high-s malleable values. Raw `ecrecover` returns `address(0)`.
 - The nonce is per account and consumed before the transfer. Sequential nonces require the backend to issue in order; if it cannot, use a per-account bitmap of used nonces.
@@ -131,6 +131,7 @@ ERC1967Proxy proxy = new ERC1967Proxy(
 Also check:
 
 - `_disableInitializers()` in every implementation constructor. OpenZeppelin warns that an uninitialized proxy or implementation can be taken over.
+- On OpenZeppelin 5.5 and later, import `Initializable`, `UUPSUpgradeable` and `ReentrancyGuard` from `@openzeppelin/contracts`. They are no longer transpiled; the upgradeable package keeps aliases for the first two only until the next major, and `ReentrancyGuardUpgradeable` is gone.
 - `_authorizeUpgrade` has an access modifier, and the upgrader is the timelock or multisig.
 - Storage layout is append-only across versions; run the OpenZeppelin upgrades plugin validation or a storage layout diff in CI. Namespaced storage (ERC-7201) in 5.x removes most gap bookkeeping but not the need to diff.
 - New initialization logic in an upgrade uses `reinitializer(n)` with a version number never used before, called in the same transaction as the upgrade (`upgradeToAndCall`).
@@ -160,11 +161,11 @@ function _readPrice() internal view returns (uint256) {
 - `maxPriceAge` is per feed, set from that feed's documented heartbeat plus a margin, and changed only through governance. One constant for all feeds is wrong for most of them.
 - On L2s, Chainlink's sequencer uptime feed answers 0 when up and 1 when down; after it comes back, wait a grace period before trusting prices, because users could not act while it was down.
 - `answeredInRound` is deprecated in Chainlink's API reference; do not build checks on it.
-- Normalise decimals from `priceFeed.decimals()` and the token's decimals explicitly. Mixing an 8-decimal price with an 18-decimal amount is a classic value bug.
+- Normalize decimals from `priceFeed.decimals()` and the token's decimals explicitly. Mixing an 8-decimal price with an 18-decimal amount is a classic value bug.
 - Spot prices from an AMM pool (`getReserves`, `slot0`) move within one transaction under a flash loan. Never use them to value collateral or mint against. A TWAP over a window longer than the attack's cost horizon, or an external oracle with a deviation check, is the minimum.
-- Decide what happens when the oracle reverts: liquidations and withdrawals need a defined behaviour, not a frozen protocol.
+- Decide what happens when the oracle reverts: liquidations and withdrawals need a defined behavior, not a frozen protocol.
 
-## Token behaviour to assume
+## Token behavior to assume
 
 - `transfer` and `transferFrom` may return `false`, return nothing, or revert. Use `SafeERC20`.
 - Received amount can be lower than requested (fee-on-transfer) or change over time (rebasing). Measure the balance delta when crediting deposits, or explicitly refuse such tokens.
@@ -176,7 +177,7 @@ function _readPrice() internal view returns (uint256) {
 | Risk | What goes wrong | Control |
 | --- | --- | --- |
 | First-depositor inflation | Attacker mints 1 share, donates assets directly, next depositor's shares round to 0 | Internal accounting instead of `balanceOf(this)`, or virtual shares and assets (OpenZeppelin ERC4626 decimals offset); test donation before first deposit |
-| Rounding direction | Rounding in the user's favour on both mint and redeem drains the vault in dust-sized loops | Round against the caller: down on shares minted and assets withdrawn, up on shares burned and assets required |
+| Rounding direction | Rounding in the user's favor on both mint and redeem drains the vault in dust-sized loops | Round against the caller: down on shares minted and assets withdrawn, up on shares burned and assets required |
 | Read-only reentrancy | Another protocol reads your share price during a callback while reserves are half-updated | Update state before callbacks, and guard view functions used as prices or expose a reentrancy status |
 | Missing health check | A function that changes a user's collateral or debt skips the solvency check (Euler's `donateToReserves` in 2023) | Every function touching collateral or debt ends with the same solvency check; fuzz with that invariant |
 | Slippage and deadline | Swaps and deposits with no minimum out or deadline are sandwiched | Caller passes `minOut` and `deadline`; contract enforces both |

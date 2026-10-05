@@ -1,6 +1,6 @@
 ---
 name: typescript-engineering
-description: TypeScript and Node.js: runtime validation, promises and async, fetch timeouts, bigint and money, dates, tsconfig strictness, ESM/CJS, npm supply chain, Cloudflare Workers. Load it before writing or reviewing any TS or JS service, route, script or library, even a short snippet, and when debugging unhandled rejections, leaks, hangs or wrong numbers.
+description: TypeScript and JavaScript code on any runtime: schema validation, promise and async bugs, fetch timeouts, bigint, money and dates, tsconfig and TypeScript 6/7, ESM/CJS, npm, pnpm and Bun supply chain and upgrades, Cloudflare Workers. Load it before writing or reviewing any TS or JS code, and when chasing unhandled rejections or wrong numbers.
 license: MIT
 metadata:
   author: Alex Tsanis
@@ -15,7 +15,8 @@ For React, Vite and React Router architecture also load frontend-engineering.
 ## Before you judge or change anything
 
 - Runtime and version: `engines`, `.nvmrc`, the Docker base image, `wrangler.jsonc`/`wrangler.toml`, Bun or Deno config. Globals, module loading and what survives past a response differ between Node, Workers, Bun, Deno and browsers.
-- Who type-checks. esbuild, swc, Vite, tsx, Bun and Node's built-in type stripping all erase types without checking them. Find the `tsc --noEmit` or `tsc -b` step in CI. If there isn't one, type errors ship.
+- Who type-checks. esbuild, swc, Vite, tsx, Bun and Node's built-in type stripping all erase types without checking them, so a green build says nothing about types. Find the `tsc --noEmit` or `tsc -b` step in CI. If there isn't one, type errors ship.
+- The TypeScript version. 6.0 changed defaults (`strict`, `types: []`, `rootDir`) and deprecated options that 7.0 rejects. 7.0 has no programmatic API, so typescript-eslint and other tools that import `typescript` need TS 6 installed alongside it ([references/tooling-and-supply-chain.md](references/tooling-and-supply-chain.md)).
 - The flags actually in effect, following `extends`. `strict` does not turn on `noUncheckedIndexedAccess` or `exactOptionalPropertyTypes`.
 - Module format: `"type"` in `package.json`, `module`/`moduleResolution`, and the `exports` map of packages involved.
 - Library majors where advice diverges: Zod 3 or 4, Express 4 or 5, the ORM and its version.
@@ -48,7 +49,7 @@ await transfers.create({ ...parsed.data, userId: session.userId });
 
 **Coercion that invents values.** `z.coerce.number()` calls `Number(input)`, so `""` becomes `0`. `z.coerce.boolean()` turns `"false"` into `true`, as does `Boolean(process.env.FLAG)`. `parseInt("10abc")` is `10`. For query strings use `z.string().regex(DIGITS).transform(Number)` with bounds, and for boolean strings `z.stringbool()` (Zod 4) or `z.enum(["true", "false"])`.
 
-**Configuration read where it is used.** `process.env.JWT_SECRET!`, `?? "dev-secret"`, `Number(process.env.TIMEOUT_MS)` (NaN when unset), `if (process.env.SKIP_AUTH)` (true for `"false"`). Parse the environment once at startup, fail to boot on anything missing, and export a frozen typed object. `z.object` rather than strict here, because the environment carries many unrelated keys. Workers get configuration from the `env` binding instead (`references/runtimes.md`).
+**Configuration read where it is used.** `process.env.JWT_SECRET!`, `?? "dev-secret"`, `Number(process.env.TIMEOUT_MS)` (NaN when unset), `if (process.env.SKIP_AUTH)` (true for `"false"`). Parse the environment once at startup, fail to boot on anything missing, and export a frozen typed object. `z.object` rather than strict here, because the environment carries many unrelated keys. Workers get configuration from the `env` binding instead ([references/runtimes.md](references/runtimes.md)).
 
 ### Promises and async
 
@@ -70,7 +71,7 @@ Event listeners and Express 4 handlers declared `async` have the same shape: not
 
 **No deadline on outbound calls.** Node's `fetch` (undici) waits up to 300 seconds for headers and 300 seconds between body chunks by default. Pass `signal: AbortSignal.timeout(config.upstreamTimeoutMs)`, combined with the incoming request's signal through `AbortSignal.any` when there is one. A timed-out write is an unknown outcome: the server may have applied it, so a retry needs an idempotency key (backend-architecture). `fetch` also resolves on 4xx and 5xx, so check `res.ok`, and consume or cancel every body you don't read; undici leaves the connection to the garbage collector otherwise and the pool can stall.
 
-**`Promise.race` as a timeout.** The losing operation keeps running and holding its socket, and unless the code clears the timer, every call leaves one pending until it expires. Cancel through an `AbortSignal` the operation honours.
+**`Promise.race` as a timeout.** The losing operation keeps running and holding its socket, and unless the code clears the timer, every call leaves one pending until it expires. Cancel through an `AbortSignal` the operation honors.
 
 **`return promise` inside `try`.** Without `await`, the rejection happens after the function has left the `try`: the `catch` never sees it, and `finally` releases the lock or connection while the operation is still running. Write `return await` inside `try` blocks (`@typescript-eslint/return-await`, default `in-try-catch`).
 
@@ -94,7 +95,7 @@ In-process, the same bug is a cache stampede: store the in-flight promise in the
 
 **Request state in module scope.** `let currentUser` set by middleware, a singleton with `setTenant()`, a module-level array collecting per-request data. Request B overwrites it while A is suspended at an `await`, and A acts as B. Workers reuse isolates across requests, so the same leak happens there. Pass context as arguments; use `AsyncLocalStorage` for logging and tracing context. A module-level rate limiter, dedupe set or lock also exists once per process, so it multiplies with instances and resets on deploy.
 
-**Errors from `catch`.** Under `strict`, `e` is `unknown`, and `(e as Error).message` is `undefined` for a thrown string and throws inside the handler when `null` or `undefined` was thrown. `e instanceof Error` is false for errors from another realm (`vm`, iframes), and `err instanceof HttpError` or `instanceof ZodError` is false for an error thrown by a second copy of the same package, so the mapping silently turns a 400 into a 500. Branch on a `code` or `name` field or the library's own guard, wrap with `new Error(msg, { cause })`, and never send `e.message` to a client. `process.on("uncaughtException")` is for synchronous cleanup before exiting; Node's docs say resuming is not safe. An `EventEmitter` that emits `'error'` with no listener throws and exits the process.
+**Errors from `catch`.** Under `strict`, `e` is `unknown`, and `(e as Error).message` is `undefined` for a thrown string and throws inside the handler when `null` or `undefined` was thrown. `e instanceof Error` is false for errors from another realm (`vm`, iframes), and `err instanceof HttpError` or `instanceof ZodError` is false for an error thrown by a second copy of the same package, so the mapping silently turns a 400 into a 500. Branch on a `code` or `name` field or the library's own guard, wrap with `new Error(msg, { cause })`, and never send `e.message` to a client. An `EventEmitter` that emits `'error'` with no listener throws, and in Node that exits the process. What the process does after an uncaught exception is crash policy, owned by nodejs-engineering.
 
 ### Resources and the event loop
 
@@ -120,7 +121,7 @@ await pipeline(fs.createReadStream(file), zlib.createGzip(), res);
 
 **Float money.** `0.1 + 0.2 !== 0.3`, `Math.round(1.005 * 100)` is `100`, `(1.005).toFixed(2)` is `"1.00"`. Money is integer minor units (`bigint` when totals can pass 2^53) or a decimal library, never `number` with a decimal point, and split amounts allocate the remainder so parts sum to the total.
 
-**Date parsing.** `new Date("2024-03-10")` is UTC midnight, `new Date("2024-03-10T00:00")` is local midnight, and non-ISO strings are implementation-specific. On a server west of UTC the first one's `getDate()` is the 9th. Invalid input gives an Invalid Date that throws only later, in `toISOString()`. Instants travel as ISO strings with `Z` or an offset (`z.iso.datetime()` in Zod 4 accepts only `Z` unless `offset: true`); calendar dates stay `YYYY-MM-DD` strings; display goes through `Intl.DateTimeFormat` with an explicit `timeZone`. Details in `references/numbers-money-time.md`.
+**Date parsing.** `new Date("2024-03-10")` is UTC midnight, `new Date("2024-03-10T00:00")` is local midnight, and non-ISO strings are implementation-specific. On a server west of UTC the first one's `getDate()` is the 9th. Invalid input gives an Invalid Date that throws only later, in `toISOString()`. Instants travel as ISO strings with `Z` or an offset (`z.iso.datetime()` in Zod 4 accepts only `Z` unless `offset: true`); calendar dates stay `YYYY-MM-DD` strings; display goes through `Intl.DateTimeFormat` with an explicit `timeZone`. Details in [references/numbers-money-time.md](references/numbers-money-time.md).
 
 ### Types that hide bugs
 
@@ -162,18 +163,18 @@ Use `?.` where absence is a legitimate state. Where absence is a bug, throw.
 
 ### Builds, modules and dependencies
 
-**Types never checked.** See the first section: a green build under esbuild, swc, Vite or Node type stripping says nothing about types.
+**Dual package hazard.** A package that ships both CJS and ESM can load twice in one process when one caller imports and another requires it. Two instances mean two registries, two caches, two configs, and `instanceof` failing across them. Check `npm ls <pkg>` for duplicate copies and log the resolved path from each import site, pick one format per app, and for libraries prefer ESM-only now that `require(esm)` works unflagged (Node 22.12 and later, for modules without top-level `await`).
 
-**Dual package hazard.** A package that ships both CJS and ESM can load twice in one process when one caller imports and another requires it. Two instances mean two registries, two caches, two configs, and `instanceof` failing across them. Check `npm ls <pkg>` for duplicate copies and log the resolved path from each import site, pick one format per app, and for libraries prefer ESM-only now that `require(esm)` works unflagged (Node 20.19+ and 22.12+, for modules without top-level `await`).
+**Install scripts and lockfiles.** CI installs with `npm ci`, `pnpm install --frozen-lockfile`, `yarn install --immutable` or `bun install --frozen-lockfile`, never a plain install that can rewrite the lock. Dependency `postinstall` scripts run with the developer's or CI runner's credentials. npm 12, pnpm and Bun run them only for allowlisted packages; npm 11 and earlier run them all. A native package missing from the allowlist installs cleanly and fails when first loaded. Review lockfile diffs for `resolved` URLs off the registry and for new transitive packages. Details in [references/tooling-and-supply-chain.md](references/tooling-and-supply-chain.md).
 
-**Install scripts and lockfiles.** CI installs with `npm ci`, `pnpm install --frozen-lockfile`, `yarn install --immutable` or `bun install --frozen-lockfile`, never a plain install that can rewrite the lock. Dependency `postinstall` scripts run with the developer's or CI runner's credentials; npm runs them by default, recent pnpm and Bun only for allowlisted packages. Review lockfile diffs for `resolved` URLs off the registry and for new transitive packages. Details in `references/tooling-and-supply-chain.md`.
+**Upgrades that hide conflicts or arrive too fresh.** `--legacy-peer-deps`, `--force` or an unexplained `overrides` entry makes the install pass and leaves two incompatible copies at runtime, or a library running against a peer it was never tested with. Resolve the conflict, or record the override with its reason and a removal date. A hijacked release does its damage in the hours or days before it is pulled, so automated updates wait (Renovate `minimumReleaseAge`, Dependabot `cooldown`, npm `min-release-age`, pnpm `minimumReleaseAge`), except for security fixes. One major of one thing per pull request; procedure in [references/tooling-and-supply-chain.md](references/tooling-and-supply-chain.md).
 
-**Runtime mismatch.** Code written for Node deployed to Workers or another edge runtime: module state shared across requests, promises cancelled after the response unless passed to `ctx.waitUntil`, Node built-ins missing when the compatibility date and flags leave Node compatibility off, bodies buffered past the memory limit. See `references/runtimes.md`.
+**Runtime mismatch.** Code written for Node deployed to Workers or another edge runtime: module state shared across requests, promises cancelled after the response unless passed to `ctx.waitUntil`, Node built-ins missing when the compatibility date and flags leave Node compatibility off, bodies buffered past the memory limit. See [references/runtimes.md](references/runtimes.md).
 
 ## Decision rules
 
 - Unknown keys: strict schemas for anything you persist or that grants authority; default strip for third-party responses, validating only the fields you read, so an added field upstream does not break you. Loose objects only for pass-through proxies that never interpret the data.
-- Concurrency: `await` in a `for...of` loop when order matters or the input is small; bounded concurrency (`references/async-and-lifetimes.md`) for data-sized input; `Promise.all` only for all-or-nothing work whose siblings are reads or abortable; `allSettled` when each outcome is reported or compensated.
+- Concurrency: `await` in a `for...of` loop when order matters or the input is small; bounded concurrency ([references/async-and-lifetimes.md](references/async-and-lifetimes.md)) for data-sized input; `Promise.all` only for all-or-nothing work whose siblings are reads or abortable; `allSettled` when each outcome is reported or compensated.
 - Numeric representation: `number` only when the producer guarantees values below 2^53 (an `int4` column, a counter); `bigint` when you do arithmetic on 64-bit or token-sized values; a string when it is an identifier.
 - Money: integer minor units for fixed-exponent currencies that only add and subtract; a decimal library with explicit rounding points when rates, percentages or proration are involved.
 - Errors: throw for defects and unexpected states; return a typed result for expected domain outcomes (not found, conflict, declined) the caller must branch on.
@@ -200,15 +201,16 @@ Use `?.` where absence is a legitimate state. Where absence is a bug, throw.
 - Does every `switch` over a union end in a `never` check that throws?
 - Is untrusted input kept out of shells, file paths, object keys, merges and regexes?
 - Are secrets compared in constant time with length handled, and generated with `crypto`?
-- Does CI run `tsc --noEmit` and type-aware lint, and install from the lockfile?
+- Does CI run `tsc --noEmit` and type-aware lint on a TypeScript version the lint tooling supports, and install from the lockfile?
+- Are dependency install scripts allowlisted per package, and is every override or forced install documented with a reason and removal date?
 - Does the code match the runtime it deploys to?
 
 ## References
 
-- `references/async-and-lifetimes.md`: read when writing or reviewing promise-heavy code, fan-out, timeouts, cancellation, streams, timers or graceful shutdown.
-- `references/boundaries.md`: read when code handles untrusted input: Zod patterns, environment parsing, webhooks, shell, file paths, prototype pollution, regexes, crypto.
-- `references/numbers-money-time.md`: read for ids, token amounts, bigint serialization, money, rounding, dates and time zones.
-- `references/tooling-and-supply-chain.md`: read when touching `tsconfig.json`, lint config, module format, package publishing, lockfiles or new dependencies.
-- `references/runtimes.md`: read when the code runs on Cloudflare Workers, another edge runtime, Bun, Deno or Node's type stripping.
+- [references/async-and-lifetimes.md](references/async-and-lifetimes.md): read when writing or reviewing promise-heavy code, fan-out, timeouts, cancellation, background work, streams or timers.
+- [references/boundaries.md](references/boundaries.md): read when code handles untrusted input: Zod patterns, forwarded headers, environment parsing, webhooks, shell, file paths, prototype pollution, regexes, hashing, signing and other crypto.
+- [references/numbers-money-time.md](references/numbers-money-time.md): read for ids, token amounts, bigint serialization, money, rounding, dates and time zones.
+- [references/tooling-and-supply-chain.md](references/tooling-and-supply-chain.md): read when touching `tsconfig.json` or the TypeScript version, lint config, module format, package publishing, lockfiles, install scripts, new dependencies, dependency upgrades or Renovate and Dependabot settings.
+- [references/runtimes.md](references/runtimes.md): read when the code runs on Cloudflare Workers, another edge runtime, Bun, Deno or Node's type stripping.
 
-Related skills: nodejs-engineering for the Node runtime in production (shutdown, server timeouts, memory, thread pool, debugging, upgrades); security-engineering for authorization and threat modelling; backend-architecture for idempotency, retries and reconciliation; database-engineering for transactions and locking; frontend-engineering for React and Vite; solidity-engineering for contracts and Ethereum hashing; test-engineering for test strategy; performance-benchmarking before optimizing.
+Related skills: nodejs-engineering for the Node process in production (crash policy, shutdown code, server timeouts, memory, thread pool, debugging, Node version upgrades); security-engineering for authorization and threat modeling; backend-architecture for idempotency, retries and reconciliation; database-engineering for transactions and locking; frontend-engineering for React and Vite; solidity-engineering for contracts and Ethereum hashing; test-engineering for test strategy; performance-benchmarking before optimizing.

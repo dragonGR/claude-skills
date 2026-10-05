@@ -73,13 +73,13 @@ export function InvoiceList({ invoices, deleteInvoice }: InvoiceListProps) {
 }
 ```
 
-Points that matter: focus moves only after the server confirms, a failed delete leaves focus where it was and says why, and focusing the neighbour's delete button keeps the user in the same column of work. The same rule applies to "Remove" in a cart, closing a tag chip, and dismissing a notification.
+Points that matter: focus moves only after the server confirms, a failed delete leaves focus where it was and says why, and focusing the neighbor's delete button keeps the user in the same column of work. The same rule applies to "Remove" in a cart, closing a tag chip, and dismissing a notification.
 
 Replacing a whole list (new filter, next page) is similar: if the focused control was inside the list, focus the list heading or the results count, and announce the new count through the status region.
 
 ## Focus, title and scroll on client-side navigation
 
-A full page load resets focus and scroll, and the screen reader announces the new document. A React Router navigation does none of that. React Router 7 has no route announcer and moves no focus, and it only manages scroll when `<ScrollRestoration>` is rendered, which exists in data mode (`createBrowserRouter`) and not in declarative mode (`<BrowserRouter>`). On every pathname change the app owns three things: where focus goes, what the title says, and where the page is scrolled.
+A full page load resets focus and scroll, and the screen reader announces the new document. A React Router navigation does none of that. React Router (7 and 8) has no route announcer and moves no focus, and it only manages scroll when `<ScrollRestoration>` is rendered, which exists in data mode (`createBrowserRouter`) and not in declarative mode (`<BrowserRouter>`). On every pathname change the app owns three things: where focus goes, what the title says, and where the page is scrolled. The examples import from `react-router`; v8 removed the `react-router-dom` package.
 
 ### Focus
 
@@ -113,7 +113,7 @@ export function PageHeading({ children }: { children: ReactNode }) {
 
 Focusing the heading makes the screen reader read it, which is the announcement. Do not also send the title to a live region; the user hears the page name twice.
 
-The effect runs on mount, so the timing is right in every setup: after loaders resolve in data mode, after a lazy route's chunk arrives, and after an exit animation under `AnimatePresence mode="wait"` (an effect on `location` in the layout would fire before the new page exists). Three conditions make it work:
+The effect runs on mount, so the timing is right in every setup: after loaders resolve in data mode, after a lazy route's chunk arrives, after an exit animation under `AnimatePresence mode="wait"` (an effect on `location` in the layout would fire before the new page exists), and in a `viewTransition` navigation, where React Router waits for the new page's commit before the transition animates. Three conditions make it work:
 
 - The page renders `PageHeading` in its loading and error states as well. A page that shows a spinner while TanStack Query is pending and renders its `<h1>` only with data has nothing to focus at mount, and focus stays on the removed link, which means `<body>`.
 - Changes that only touch search params (filters, sort, pagination) do not remount the page, so focus stays on the control the user just used. That is the behavior you want.
@@ -129,14 +129,14 @@ Give every route a unique, specific title ("Invoice INV-2041, Billing, Acme"); i
 <title>{`Invoice ${invoiceNumber}, Billing, ${APP_NAME}`}</title>
 ```
 
-The children must be a single string. `<title>Invoice {invoiceNumber}</title>` passes an array and React throws. Only one `<title>` may render at a time; if a layout and a page both render one, or an animated route exit keeps the old page mounted, both end up in `<head>` and React documents the result as undefined. Use one mechanism per app: React's `<title>`, or `react-helmet-async` where a site already uses it for other head tags, not both. Render a title in the page's loading state (from the route param) so the previous page's title never sits on the new page while data loads.
+The children must be a single string. `<title>Invoice {invoiceNumber}</title>` passes an array; a client render leaves the title empty with no error, so the bug is silent. Only one `<title>` may render at a time; if a layout and a page both render one, or an animated route exit keeps the old page mounted, both end up in `<head>` and React documents the result as undefined. Use one mechanism per app: React's `<title>`, or `react-helmet-async` where a site already uses it for other head tags, not both. Render a title in the page's loading state (from the route param) so the previous page's title never sits on the new page while data loads.
 
 ### Scroll
 
 Data mode: render `<ScrollRestoration />` once, in the root route's component. On a new navigation it scrolls to the top; on Back and Forward it restores the offset saved for that history entry (keyed by `location.key` in `sessionStorage` by default; `getKey` changes that). `<Link preventScrollReset>` keeps the offset for in-page changes such as `?tab=billing`. It never touches focus, which is why the heading above uses `preventScroll: true`: without it, focusing a heading near the top would undo the offset ScrollRestoration just restored on Back.
 
 ```tsx
-import { Outlet, ScrollRestoration } from 'react-router-dom'
+import { Outlet, ScrollRestoration } from 'react-router'
 
 export function RootRoute() {
   return (
@@ -156,7 +156,7 @@ Declarative mode has no `<ScrollRestoration>`, and a client-side push does not s
 
 ```tsx
 import { useLayoutEffect } from 'react'
-import { useLocation, useNavigationType } from 'react-router-dom'
+import { useLocation, useNavigationType } from 'react-router'
 
 function hashTarget(hash: string): HTMLElement | null {
   if (!hash) return null

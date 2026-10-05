@@ -1,6 +1,6 @@
 ---
 name: backend-architecture
-description: Backend flows that must survive retries, races and crashes: idempotency keys, timeouts, outbox and queue consumers, jobs and locks, state machines, caching, webhooks, API changes, graceful shutdown. Load it before writing or reviewing any code that moves money or state across a network, queue, job or service, even a short snippet, and before answering why data is missing or doubled.
+description: Backend flows that must survive retries, races and crashes: idempotency keys, unknown outcomes, timeouts, outbox and queue consumers, job leases, state machines, caching, webhooks, API changes, graceful shutdown. Load it before writing or reviewing code that moves money or state across a network, queue or job, and when data goes missing or doubles.
 license: MIT
 metadata:
   author: Alex Tsanis
@@ -14,7 +14,7 @@ The job is keeping durable state correct when requests repeat, race, time out an
 
 - Every piece of durable state has one owner that enforces its invariants. Everything else goes through the owner's interface. Two services writing one table is one service with a network in the middle.
 - A call that leaves the process has three outcomes: succeeded, failed, unknown. Timeouts, connection resets, 500/502/504 and a crash after sending are unknown.
-- Exactly-once delivery does not exist. What you can build is at-least-once delivery plus effects that are idempotent where they are applied.
+- Exactly-once delivery does not exist. What you can build is at-least-once delivery plus effects that are idempotent where they are applied. Kafka transactions and SQS FIFO deduplication stop at the broker; they do not cover your database write or the provider call.
 - Identity, ownership, prices and amounts come from the owner's state, never from the request body. security-engineering covers authorization in depth.
 - Before calling something a bug, trace who can reach it and check for a later guard: a unique constraint, a conditional update, a version check, a provider-side idempotency key, a reconciler. Report it only if it survives that second look.
 
@@ -26,9 +26,7 @@ Each entry: what it looks like in code, why it breaks, what to do instead. Templ
 
 **Dual write.** `await orders.save(order); await bus.publish('order.created', order)`, or a DB write followed by an HTTP call to a service that has to stay in step, or the reverse order. A crash, deploy or broker timeout between the two leaves the database and the rest of the world disagreeing, silently and permanently: orders nobody fulfils, emails about rows that rolled back. Wrapping both in a transaction changes nothing because the publish is not part of it. Write the event into an `outbox` table in the same transaction as the state change and let a relay publish it afterwards.
 
-**Network call inside a database transaction.** `BEGIN; UPDATE ...; await psp.charge(...); COMMIT`. If the commit fails the charge stands and the row does not. The transaction also holds row locks and a pooled connection for the whole network round trip, so one slow dependency exhausts the pool and blocks unrelated writers. Commit an intent record (`payment_pending`), call outside any transaction, record the result in a second transaction, and let a reconciler finish rows left in the intent state.
-
-**Blind retry of a non-idempotent side effect.** A retry loop, an HTTP client retry option, a mesh retry policy or a queue redelivery around `createCharge`, `transfer`, `sendSms`. The first attempt timed out after the provider did the work; the retry does it again. Send an idempotency key the provider honours, generated and stored before the first attempt and identical on every attempt. Without a key, retry only when the error proves the request never reached the server (connection refused, DNS failure). Provider keys expire: Stripe may prune keys once they are at least 24 hours old and rejects a reused key whose parameters differ, so reconciliation of an unknown outcome has to happen inside the retention window or look the operation up by your own reference.
+**Blind retry of a non-idempotent side effect.** A retry loop, an HTTP client retry option, a mesh retry policy or a queue redelivery around `createCharge`, `transfer`, `sendSms`. The first attempt timed out after the provider did the work; the retry does it again. Send an idempotency key the provider honors, generated and stored before the first attempt and identical on every attempt. Without a key, retry only when the error proves the request never reached the server (connection refused, DNS failure). Provider keys expire: Stripe may prune keys once they are at least 24 hours old and rejects a reused key whose parameters differ, so reconciliation of an unknown outcome has to happen inside the retention window or look the operation up by your own reference.
 
 **Idempotency key stored after the side effect.** `SELECT` the key, not found, do the work, `INSERT` the key. Two concurrent duplicates (double click, a client retrying after its own timeout) both pass the `SELECT` and both do the work, and a crash after the work leaves no record at all. Insert the key first with state `in_progress` under a unique constraint and commit it; whoever loses the insert gets the stored response or a 409. Store the final response in the same transaction as the local effect.
 
@@ -40,11 +38,9 @@ Each entry: what it looks like in code, why it breaks, what to do instead. Templ
 
 ### Concurrent writes and state machines
 
-**Lost update.** `const acct = await repo.find(id); acct.balance -= amount; await repo.save(acct)`, or the same with a JSON document, a counter via Redis `GET`/`SET`, or an ORM entity loaded early in the request. Two requests read the same value and one write disappears. A transaction at PostgreSQL's default READ COMMITTED isolation does not prevent this. Put the arithmetic and the invariant in one statement (`UPDATE accounts SET balance = balance - $1 WHERE id = $2 AND balance >= $1`, then check the row count), or compare a version column, or lock with `SELECT ... FOR UPDATE` when the decision needs several rows.
+Lost updates, check-then-insert races, network calls made inside a database transaction and unstable pagination are covered, with fixes, in database-engineering. In backend code each invariant lives in one conditional statement or constraint owned by one service, and no transaction stays open across a network call.
 
 **Unguarded state transition.** `UPDATE orders SET status = 'shipped' WHERE id = $1`, or `if (order.status === 'paid')` in application code followed by a separate save. This ships cancelled orders, refunds twice, resurrects deleted items and lets two workers both win. Keep an allowed-transitions table in code, write `WHERE id = $1 AND status = ANY($2)`, and treat zero rows as a conflict (re-read to tell "already done" from "illegal"). Side effects tied to a transition run only in the request that won it.
-
-**Check-then-insert uniqueness.** `if (!(await users.findByEmail(email))) await users.insert(...)`. Both racers see nothing. Use a unique constraint (a partial unique index for rules like one active subscription per user), catch the violation (SQLSTATE `23505` in PostgreSQL) and map it to 409.
 
 ### Jobs, locks and time
 
@@ -70,7 +66,7 @@ Each entry: what it looks like in code, why it breaks, what to do instead. Templ
 
 **Missing timeouts.** HTTP clients, database drivers, pool checkout and lock waits often wait forever by default; node-postgres ships with `connectionTimeoutMillis`, `statement_timeout` and `query_timeout` all unset. One slow dependency parks every request and your service goes down with it. Give every outbound call a deadline taken from the caller's remaining budget, and give pool checkout its own timeout.
 
-**Retry storm.** Client, gateway, service and driver each make up to three attempts, so one user request becomes up to 81 calls exactly when the dependency is overloaded; fixed delays make the retries arrive together. Retry at one layer only, cap attempts, back off exponentially with full jitter, honour `Retry-After`, keep a retry budget (retries as a bounded fraction of traffic), and do not retry a 4xx other than 408 and 429 unless the API documents it as retryable, such as an idempotency "request in progress" 409.
+**Retry storm.** Client, gateway, service and driver each make up to three attempts, so one user request becomes up to 81 calls exactly when the dependency is overloaded; fixed delays make the retries arrive together. Retry at one layer only, cap attempts, back off exponentially with full jitter, honor `Retry-After`, keep a retry budget (retries as a bounded fraction of traffic), and do not retry a 4xx other than 408 and 429 unless the API documents it as retryable, such as an idempotency "request in progress" 409.
 
 **No backpressure or circuit breaker.** `Promise.all(items.map(callApi))` over an unbounded list, an in-memory queue that grows until the process is OOM-killed, a consumer prefetch of thousands. When the dependency slows, latency and memory grow without limit. Bound concurrency, bound queues and reject when full (503 with `Retry-After`), open a breaker after repeated failures and probe before closing it, and shed load before the process falls over.
 
@@ -80,9 +76,7 @@ Each entry: what it looks like in code, why it breaks, what to do instead. Templ
 
 ### Edges and contracts
 
-**Webhook processed inline.** The handler does all the business work, calls other services and returns 200 after twenty seconds; the provider times out and redelivers, so the work runs twice, and a provider backlog becomes your outage. A global JSON body parser also destroys the raw bytes, so the signature check gets removed "temporarily". Verify the signature over the raw body, insert the event keyed by the provider's event id with `ON CONFLICT DO NOTHING`, return 2xx, and process asynchronously. Treat the payload as a hint and refetch the object from the provider when its current state matters, since events arrive late, out of order and replayed.
-
-**Unstable pagination.** `ORDER BY created_at LIMIT 50 OFFSET 100` with a non-unique `created_at`, or no `ORDER BY`. Equal keys shuffle between pages and inserts shift offsets, so clients skip or repeat rows, and deep offsets scan everything they discard. Use keyset pagination on a unique, immutable tuple such as `(created_at, id)` behind an opaque cursor with a bounded limit. A cursor built from a JavaScript `Date` truncates PostgreSQL's microsecond timestamps and skips rows; carry the database's text form or the id.
+**Webhook processed inline.** The handler does all the business work, calls other services and returns 200 after twenty seconds; the provider times out and redelivers, so the work runs twice, and a provider backlog becomes your outage. A global JSON body parser also destroys the raw bytes, so the signature check gets removed "temporarily". Verify the signature over the raw body, insert the event keyed by the provider's event id with `ON CONFLICT DO NOTHING`, return 2xx, and process asynchronously. Applying the event in the same short transaction as the dedupe insert is fine when the effect is a local write; anything that calls another service goes through the async path. Treat the payload as a hint and refetch the object from the provider when its current state matters, since events arrive late, out of order and replayed.
 
 **Breaking change shipped as a refactor.** Renaming or removing a field, `id` changing from number to string, tighter validation on input that used to pass, a changed default, a new enum value that old clients switch over exhaustively, different error codes, a field whose meaning changes. The same applies to event payloads, where messages in the old shape are still sitting in the queue during the deploy. Keep changes additive within a version; otherwise expand, migrate the known consumers, then contract. Readers ignore unknown fields and handle unknown enum values.
 
@@ -92,9 +86,7 @@ Each entry: what it looks like in code, why it breaks, what to do instead. Templ
 
 **Missing config falls back to a default.** `process.env.PAYOUT_API_URL ?? 'https://sandbox...'`, `DATABASE_URL || 'postgres://localhost/dev'`, `Number(process.env.LIMIT)` quietly becoming `NaN`, a security switch whose absence means off. In production a missing variable sends money to a sandbox while marking it paid, writes to the wrong database or disables a check. Parse all configuration once at startup and refuse to start when a required value is missing or malformed. Defaults are acceptable only for tunables where any value in range is safe (log level, pool size); never for destinations, credentials, environment identity or security switches.
 
-**Shutdown that drops in-flight work.** No SIGTERM handler, `process.on('SIGTERM', () => process.exit(0))`, or a shell-form Docker `CMD` so the signal never reaches the process and it is SIGKILLed on every deploy. In Kubernetes, removal from Service endpoints starts at the same time as graceful shutdown, so requests still arrive after SIGTERM; `preStop` runs before SIGTERM; SIGKILL follows `terminationGracePeriodSeconds` (default 30). On SIGTERM fail readiness, keep serving for a short drain delay, stop accepting, finish in-flight requests, let workers finish or abandon their current job, then close pools, all inside the grace period. SIGKILL and OOM kills skip every handler, so long work must be resumable from a lease and idempotent steps anyway.
-
-**Liveness probe that checks dependencies.** `/healthz` pings the database, the database blips, every pod fails liveness and restarts together, and the reconnect storm keeps the database down. Liveness answers only "is this process stuck"; dependency checks belong in readiness, and even there consider whether pulling every pod out of rotation helps anyone.
+**Shutdown that drops in-flight work or never finishes.** The SIGTERM handler exits at once and cuts off requests and jobs, or it waits on connections that never close until SIGKILL arrives. Load balancers keep routing to the instance for a few seconds after SIGTERM, and keep-alive connections that were busy when the listener closed stay open after their response. The sequence: fail readiness, keep serving through a short drain delay, stop accepting, finish in-flight requests and close each connection when its response is done, stop workers so their current job finishes or is abandoned to its lease, close pools, then exit, with a hard deadline inside the grace period that closes whatever is left. SIGKILL and OOM kills skip every handler, so long work must be resumable from a lease and idempotent steps anyway. Code in [references/api-and-lifecycle.md](references/api-and-lifecycle.md); signal delivery, grace periods and probes are in infrastructure-ops.
 
 ## Decision rules
 
@@ -105,7 +97,6 @@ Each entry: what it looks like in code, why it breaks, what to do instead. Templ
 - **Synchronous or accepted.** Answer synchronously when the work is local, fast and the caller needs the result. Return 202 with a status resource when the work calls slow or unreliable dependencies, or when the caller retries on its own clock (webhooks, batch clients).
 - **Locks.** When the data lives in one database, claim rows there instead of taking a distributed lock. A distributed lock without fencing is an efficiency tool, never the only correctness guard.
 - **Caching.** Cache what is expensive and tolerates staleness, and write down the tolerated staleness. Never cache the input to an authorization or money decision.
-- **Pagination.** Keyset by default. Offset only for small, rarely changing admin lists where a skipped row is harmless.
 - **Service boundaries.** Split when there is an independent owner, scaling profile or release cadence. Shared tables mean it is still one service.
 
 ## Review checklist
@@ -140,6 +131,6 @@ Answer each with yes or no before calling a backend change done.
 - [outbox-and-consumers.md](references/outbox-and-consumers.md): read when a state change must produce an event or a consumer applies events. Outbox table, relay, dedupe inbox, ordering by version, dead letters.
 - [jobs-and-state-machines.md](references/jobs-and-state-machines.md): read when writing background jobs, schedulers, locks or status fields. Lease claim with fencing token, heartbeats, guarded transitions, stuck-state recovery.
 - [dependencies-and-load.md](references/dependencies-and-load.md): read when calling other services or putting a cache in front of something. Outcome classification, deadlines, retry with jitter and budget, breaker, bounded concurrency, stampede control.
-- [api-and-lifecycle.md](references/api-and-lifecycle.md): read when changing an API surface, receiving webhooks, loading config or handling shutdown and probes. Keyset cursors, compatibility table, problem details, startup config, SIGTERM handling.
+- [api-and-lifecycle.md](references/api-and-lifecycle.md): read when changing an API surface, receiving webhooks, loading config or handling shutdown. Compatibility table, problem details, startup config, the shutdown sequence.
 
-Related skills: database-engineering for schema, isolation levels and migrations; security-engineering for authorization and threat modelling; infrastructure-ops for deployment, probes and observability plumbing; test-engineering for concurrency and failure-injection tests.
+Related skills: database-engineering for schema, isolation levels and migrations; security-engineering for authorization and threat modeling; infrastructure-ops for deployment, probes and observability plumbing; test-engineering for concurrency and failure-injection tests.

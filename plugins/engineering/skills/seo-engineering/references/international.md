@@ -1,3 +1,5 @@
+# International sites
+
 Read this when adding a locale, generating hreflang, or writing any routing that depends on country, language, IP or `Accept-Language`.
 
 ## URL model
@@ -11,15 +13,17 @@ Pages whose main content is still untranslated are duplicates. Either translate 
 Build every page's set from one validated source, so reciprocity and self-reference hold by construction instead of by discipline.
 
 ```ts
-const HREFLANG_PATTERN = /^[a-z]{2}(-[A-Z]{2})?$/
+const HREFLANG_PATTERN = /^(?<language>[a-z]{2})(?:-(?<script>[A-Z][a-z]{3}))?(?:-(?<region>[A-Z]{2}))?$/
 
 type Locale = { hreflang: string; pathPrefix: string }
 
 export function assertLocales(locales: readonly Locale[]): void {
   for (const { hreflang } of locales) {
-    if (!HREFLANG_PATTERN.test(hreflang)) throw new Error(`invalid hreflang code: ${hreflang}`)
-    const [language, region] = hreflang.split('-')
+    const parts = HREFLANG_PATTERN.exec(hreflang)?.groups
+    if (!parts) throw new Error(`invalid hreflang code: ${hreflang}`)
+    const { language = '', script, region } = parts
     if (!ISO_639_1.has(language)) throw new Error(`unknown language in ${hreflang}`)
+    if (script && !ISO_15924.has(script)) throw new Error(`unknown script in ${hreflang}`)
     if (region && !ISO_3166_ALPHA2.has(region)) throw new Error(`unknown region in ${hreflang}`)
   }
 }
@@ -39,11 +43,11 @@ export function hreflangLinks(
 }
 ```
 
-`ISO_639_1` and `ISO_3166_ALPHA2` are code sets owned in one module; the pattern alone would accept `jp` or `en-UK`. `localizedPath` returns the canonical path of this page in that locale, or `null` when the page does not exist there. The same function runs on every locale version of the page, so each version emits the same set, including itself. A page that exists in only one locale emits no hreflang at all.
+`ISO_639_1`, `ISO_15924` and `ISO_3166_ALPHA2` are code sets owned in one module; the pattern alone would accept `jp` or `en-UK`. `localizedPath` returns the canonical path of this page in that locale, or `null` when the page does not exist there. The same function runs on every locale version of the page, so each version emits the same set, including itself. A page that exists in only one locale emits no hreflang at all.
 
 Rules the generator enforces:
 
-- Language is ISO 639-1 (`en`, `de`, `ja`, `zh`), optionally followed by an ISO 3166-1 alpha-2 region (`en-GB`, `pt-BR`). Region alone is invalid. Google ignores reserved codes such as `UK`, `EU` and `UN` in the region position, so `en-UK` is treated as `en`.
+- Language is ISO 639-1 (`en`, `de`, `ja`, `zh`), optionally followed by an ISO 15924 script (`zh-Hant`, `zh-Hans`) and then an optional ISO 3166-1 alpha-2 region (`en-GB`, `pt-BR`, `zh-Hans-US`). Region alone is invalid, and UN M.49 regions such as `es-419` are not supported. A script and a region say different things: `zh-Hant` is Traditional Chinese anywhere, `zh-TW` is Chinese for Taiwan, so do not swap one for the other to get past a validator. Google ignores reserved codes such as `UK`, `EU` and `UN` in the region position, so `en-UK` is treated as `en`.
 - Every target is an absolute, canonical URL that returns 200 and is indexable. Build it from configured origin, in the same host, protocol and slash form as your canonicals.
 - Each locale page's canonical is itself. Never canonicalize `/de/...` to `/en/...`.
 - `x-default` points at the language selector or the fallback page users get when no locale matches.

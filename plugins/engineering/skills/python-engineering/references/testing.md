@@ -16,7 +16,7 @@ The symptom is order dependence: a test passes with `pytest path::test_x`, fails
 | `mock.patch` started without `stop()`, or patching in `setup_module` | `with patch(...)` or the `mocker`/`monkeypatch` fixtures, which undo automatically |
 | Frozen time or seeded random left in place | Inject a clock and an RNG; if patching, use a fixture that restores |
 
-Transaction-per-test with SQLAlchemy 2.0:
+Transaction-per-test with SQLAlchemy 2.x:
 
 ```python
 @pytest.fixture
@@ -32,6 +32,8 @@ def db(engine: Engine) -> Iterator[Session]:
 ```
 
 With `join_transaction_mode="create_savepoint"`, code under test can call `session.commit()` and `rollback()` normally; everything is discarded when the outer transaction rolls back. This does not cover code that opens its own connections (background threads, a second engine), and it hides bugs that only appear across real commits, such as two concurrent transactions racing. Test those against a real database with separate connections.
+
+On SQLite the stdlib driver's legacy transaction handling breaks the savepoint, so the test's rows are committed for real and leak into later tests. Create the engine with `connect_args={"autocommit": False}` (Python 3.12+), or run these tests on the production database engine.
 
 ## Patching the right name
 
@@ -61,5 +63,6 @@ with patch("billing.charge.post") as fake: ...
 - The second call: mutable default arguments and module-level caches only misbehave on the second invocation in the same process. Call the function twice with different inputs.
 - Aware vs naive: construct test datetimes with `tzinfo`, and include a case on a non-UTC local zone (`monkeypatch.setenv("TZ", ...)` plus `time.tzset()` on Unix) for code that converts timestamps.
 - Money: amounts whose float representation is inexact (`0.1`, `19.99`, `2.675`) and allocations that do not divide evenly.
+- Async wiring: pytest-asyncio defaults to strict mode, where async tests need `@pytest.mark.asyncio` and async fixtures need `@pytest_asyncio.fixture` (or set `asyncio_mode = "auto"`). pytest 8.4 and later fail an async test that no plugin runs instead of skipping it, and pytest 9 errors on an unhandled async fixture. In pytest-asyncio 1.4 an async fixture's loop defaults to the fixture's own scope, while tests default to a per-function loop, so a session-scoped engine or client used from ordinary tests fails with "attached to a different loop" or "Event loop is closed". Give the tests the same `loop_scope` as the fixture (or set `asyncio_default_test_loop_scope`). pytest-asyncio 1.0 removed the `event_loop` fixture, so overriding it in an old `conftest.py` no longer does anything.
 - Cancellation and timeouts in async code: cancel the task mid-operation and assert cleanup happened and no partial write remains.
 - Concurrency: two threads or tasks hitting the same code path, with a barrier to force the interleaving, rather than hoping a loop of 100 iterations catches it.

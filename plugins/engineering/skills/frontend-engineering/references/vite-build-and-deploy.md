@@ -37,7 +37,7 @@ export default defineConfig(({ mode }) => {
 })
 ```
 
-`loadEnv` with an empty prefix returns every variable from the `.env*` files, and `define` writes all of them into the bundle wherever `process.env` appears. A CI secret, a database URL or a deploy token in `.env.production` is now public.
+`loadEnv` with an empty prefix returns every variable from the `.env*` files and every variable in the process environment, and `define` writes all of them into the bundle wherever `process.env` appears. A database URL in `.env.production`, or a deploy token the CI runner exports, is now public.
 
 After:
 
@@ -56,7 +56,7 @@ Pass the narrowest prefix to `loadEnv` and define named values one at a time. Mo
 Other details that cause bugs:
 
 - `.env` files are not loaded into `process.env` while `vite.config` is evaluated. Code in the config that reads `process.env.VITE_API_URL` sees only what the shell exported. Use `loadEnv` when the config itself needs a value.
-- Mode-specific files win over generic ones: `.env.production` overrides `.env`, and `.env.[mode].local` overrides both. `vite build --mode staging` loads `.env.staging`. Keep `.env*.local` out of git.
+- Mode-specific files win over generic ones: `.env.production` overrides `.env`, and `.env.[mode].local` overrides both. `vite build --mode staging` loads `.env.staging`. Keep `.env*.local` out of git. A variable already set in the shell or CI environment beats every `.env*` file, so a `VITE_API_BASE_URL` exported for the whole CI pipeline, or left over in a developer's shell, overrides `.env.staging` without a warning. Keep `VITE_*` values out of CI-wide env, or set them per job.
 - A missing variable is `undefined` at runtime, not a build error. Validate in one module and let the app fail at boot with a clear message.
 - Declare variables on `ImportMetaEnv` in `src/vite-env.d.ts` for editor types. Types do not prove the value exists; the schema does.
 - `import.meta.env.MODE`, `BASE_URL`, `PROD`, `DEV` and `SSR` are built in. Gate debug tooling on `import.meta.env.DEV` so the minifier drops it from production builds.
@@ -91,15 +91,23 @@ export async function loadRuntimeConfig(path: string): Promise<RuntimeConfig> {
 
 ```tsx
 // src/main.tsx
-const config = await loadRuntimeConfig(`${import.meta.env.BASE_URL}${RUNTIME_CONFIG_FILE}`)
-createRoot(rootElement).render(
-  <ConfigProvider value={config}>
-    <App />
-  </ConfigProvider>,
+const root = createRoot(rootElement)
+
+loadRuntimeConfig(`${import.meta.env.BASE_URL}${RUNTIME_CONFIG_FILE}`).then(
+  (config) =>
+    root.render(
+      <ConfigProvider value={config}>
+        <App />
+      </ConfigProvider>,
+    ),
+  (error: unknown) => {
+    reportError(error)
+    root.render(<ConfigError />)
+  },
 )
 ```
 
-If the fetch or the parse fails, render a static error instead of falling back to defaults: a defaulted API URL or chain id sends real users and real transactions to the wrong place. Top-level `await` needs a build target that supports it; Vite 8's default browser targets do.
+If the fetch or the parse fails, render a static error instead of falling back to defaults: a defaulted API URL or chain id sends real users and real transactions to the wrong place. A bare top-level `await` on the load would leave an unhandled rejection and a blank page instead.
 
 The config file is public too. It holds endpoints and ids, never secrets.
 
@@ -176,7 +184,7 @@ Also:
 
 Deep links and refreshes on `/projects/42` need the host to serve `index.html` for paths that are not files. On Cloudflare Workers static assets, `not_found_handling = "single-page-application"` serves `/index.html` with 200 for requests that match no asset. Consequences:
 
-- The router must render a not-found page for unknown paths (`path: '*'`); the host cannot.
+- The host answers every unknown path with the shell and 200, so the router must render a not-found page (`path: '*'`). For public pages that need a real 404, leave `not_found_handling` unset and put a Worker in front that serves the shell only for known client routes; `seo-engineering` (`react-vite-spa.md`) has the pattern.
 - If the same Worker serves the API, a browser navigation to an API path can be answered with HTML. Cloudflare's docs show this case and use `run_worker_first` with route patterns such as `/api/*` so API paths reach the Worker first.
 - On public marketing pages, a 200 response with a "not found" view is a soft 404 to Google. Google's documented options: redirect with JavaScript to a URL that returns a real 404 status, or add `<meta name="robots" content="noindex">` to the error view. The `seo-engineering` skill covers metadata, `react-helmet-async` and the sitemap.
 
@@ -200,6 +208,7 @@ If a build step prerenders routes to HTML and the entry switches to `hydrateRoot
 - Format dates and numbers with an explicit locale and `timeZone` known at build time, or render the absolute value first and switch to a relative or local format after mount.
 - Use `useId` for ids, never a counter or `Math.random()` in render.
 - Read browser-only state through `useSyncExternalStore` with a `getServerSnapshot` that matches the prerendered output, or after mount.
+- For a whole browser-only subtree (wallet UI, anything reading `localStorage`), React 19.3's `use(browser())` from `react-dom` inside a `<Suspense>` boundary makes the prerender keep the fallback and the client render the subtree after hydration, with no recoverable hydration error and no mounted-flag effect. On earlier React, render it after mount from a state flag set in an effect.
 - Avoid invalid nesting (`<div>` in `<p>`, `<a>` in `<a>`), which the browser rewrites before React hydrates.
 - Prerendered HTML is built once for every visitor. It must not contain anything user-specific.
 

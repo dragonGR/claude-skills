@@ -200,6 +200,8 @@ spec:
           command: ["node", "dist/migrate.js"]
 ```
 
-The pipeline applies the Job, waits for `condition=complete` with a timeout, stops the release on failure or timeout, and only then updates the Deployment. `backoffLimit: 0` because a migration that failed halfway needs a person or an idempotent rerun, not an automatic retry loop. Name the Job per release: a Job's pod template cannot be changed after creation, so reapplying one fixed name with a new image fails. The migration itself sets `lock_timeout` and follows the expand-contract rules in database-engineering.
+The pipeline applies the Job, waits with a timeout until it reports either the `Complete` or the `Failed` condition, stops the release on failure or timeout, and only then updates the Deployment. Waiting for `condition=complete` alone notices a failed Job (`backoffLimit: 0` fails it on the first error) only when the timeout expires. `backoffLimit: 0` because a migration that failed halfway needs a person or an idempotent rerun, not an automatic retry loop. Name the Job per release: a Job's pod template cannot be changed after creation, so reapplying one fixed name with a new image fails. The migration itself sets `lock_timeout` and follows the expand-contract rules in database-engineering.
+
+A proxy the migration needs (Cloud SQL Auth Proxy, a service-mesh sidecar) must be a native sidecar: an `initContainers` entry with `restartPolicy: Always`, stable since Kubernetes 1.33, which does not keep the Job from completing once the main container exits. Declared as a plain second container, it keeps running after the migration exits, and the Job never completes.
 
 If the migration tool keeps a lock row (Liquibase `DATABASECHANGELOGLOCK`, similar tables in other tools), a killed run can leave it held. Know the tool's release command before the first incident, and alert when a migration Job exceeds its deadline instead of letting new pods wait on the lock.

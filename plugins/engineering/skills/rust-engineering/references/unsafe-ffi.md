@@ -220,6 +220,6 @@ The opaque struct with a `PhantomData<(*mut u8, PhantomPinned)>` marker is `!Sen
 ## Verifying unsafe code
 
 - Miri: `cargo +nightly miri test` runs tests in an interpreter that reports out-of-bounds access, use-after-free, uninitialized reads, misalignment, invalid enum and bool values, data races and aliasing violations on the paths the tests execute. It cannot call most foreign functions, so keep the pure-Rust unsafe logic (buffers, parsers, pointer arithmetic) separable from the FFI calls and test it under Miri.
-- Sanitizers for FFI paths: AddressSanitizer via nightly `-Zsanitizer=address` catches memory errors on both sides of the boundary.
+- Sanitizers for FFI paths: `RUSTFLAGS=-Zsanitizer=address cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu`. Sanitizers are nightly-only (rustc 1.98 has no stable flag). The explicit `--target` keeps `RUSTFLAGS` away from build scripts and proc macros, which otherwise get instrumented and usually break the build. ASan checks only code it instrumented, so build the C side with `-fsanitize=address` too (for the `cc` crate, `CFLAGS=-fsanitize=address`) if you want errors caught on both sides of the boundary.
 - Fuzz any unsafe parser or decoder that sees external bytes (`cargo fuzz`), under a sanitizer.
 - A test passing under plain `cargo test` is weak evidence for unsafe code: UB can behave correctly until an optimization or allocator change.

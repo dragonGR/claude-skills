@@ -25,7 +25,7 @@ test('checkout has no detectable WCAG A/AA violations, including the error state
 ```
 
 - Scan every state, not only the first paint: open dialogs, expanded menus, validation errors, empty and loading states, dark theme. axe only sees what is in the DOM at that moment.
-- `wcag22aa` covers the rules axe maps to 2.2 AA; there is no `wcag22a` tag. Add `best-practice` only if the team treats those as blocking, and report them separately from WCAG failures.
+- In axe-core 4.13, `wcag22aa` tags one rule, `target-size` (2.5.8). 2.4.11, 2.5.7, 3.3.7 and 3.3.8 are manual checks, and there is no `wcag22a` tag. For EU reporting, axe also tags rules `EN-301-549`. Add `best-practice` only if the team treats those as blocking, and report them separately from WCAG failures.
 - `.exclude()` and `.disableRules()` are for a tracked, dated exception with a named owner, not for turning a red build green.
 - Treat `incomplete` results (axe could not decide, typically contrast over images or gradients) as a list to check by hand.
 

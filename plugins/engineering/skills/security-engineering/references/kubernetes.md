@@ -6,24 +6,28 @@ Read this when reviewing workload manifests, RBAC, network policy, admission pol
 
 **Privileged or host-coupled pods.** `privileged: true`, `hostNetwork`, `hostPID`, `hostIPC`, `hostPath` mounts (especially `/`, `/var/run/docker.sock`, `/var/lib/kubelet`, `/etc`), added capabilities such as `SYS_ADMIN` or `NET_ADMIN`. Any of these usually turns a compromised container into a compromised node. Each needs a written reason and an admission exception scoped to that workload.
 
-**Default security context.** No `runAsNonRoot`, `allowPrivilegeEscalation` left true, capabilities not dropped, writable root filesystem, no seccomp profile. For application pods set:
+**Default security context.** No `runAsNonRoot`, `allowPrivilegeEscalation` left true, capabilities not dropped, writable root filesystem, no seccomp profile. `allowPrivilegeEscalation`, `readOnlyRootFilesystem` and `capabilities` exist only on the container `securityContext`; pasted under the pod's `spec.securityContext` they are rejected by strict validation or dropped by lax validation, and the pod runs with escalation allowed and capabilities kept. For application pods set:
 
 ```yaml
-securityContext:
-  runAsNonRoot: true
-  allowPrivilegeEscalation: false
-  readOnlyRootFilesystem: true
-  capabilities:
-    drop: ["ALL"]
-  seccompProfile:
-    type: RuntimeDefault
+spec:
+  securityContext:            # pod level
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: app
+      securityContext:        # every container, init container and ephemeral container
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
 ```
 
-Then check the image actually runs as a non-root user; `runAsNonRoot` makes a root image fail to start, which is the point, but it surprises people during rollout. Enforce with Pod Security Admission `restricted` on application namespaces, using the `warn` and `audit` modes first to find what would break.
+Then check the image runs as a numeric non-root UID. `runAsNonRoot` refuses a root image, and also an image whose `USER` is a name the kubelet cannot verify, which is the point, but it surprises people during rollout. A read-only root filesystem needs an `emptyDir` mounted at each path the app writes, such as `/tmp`. Enforce with Pod Security Admission `restricted` on application namespaces, using the `warn` and `audit` modes first to find what would break.
 
 **Service account tokens nobody needs.** Every pod gets the namespace's `default` service account token mounted unless told otherwise. If the workload does not call the Kubernetes API, set `automountServiceAccountToken: false`. If it does, give it a dedicated service account.
 
-**RBAC wider than it looks.** Wildcards in `verbs` or `resources`; `get`/`list` on `secrets` in a namespace (reads every secret there, including other workloads' credentials); `create` on `pods` or `pods/exec` (run anything as any service account in the namespace, which inherits its secrets); `escalate`, `bind` or `impersonate`; a `ClusterRole` meant for one namespace granted in every namespace through a `ClusterRoleBinding` instead of a namespaced `RoleBinding`; aggregated ClusterRoles picking up new rules. Verify effective permissions, not the YAML you wrote:
+**RBAC wider than it looks.** Wildcards in `verbs` or `resources`; `get`/`list` on `secrets` in a namespace (reads every secret there, including other workloads' credentials); `create` on `pods` or `pods/exec` (run anything as any service account in the namespace, which inherits its secrets); any verb on `nodes/proxy`, often granted to monitoring agents, because even `get` reaches the kubelet API on port 10250 and its `/exec` endpoint over a WebSocket upgrade, which runs commands in every pod on the node (with fine-grained kubelet authorization, beta and on by default from 1.33 and GA in 1.36, grant `nodes/metrics`, `nodes/stats` or `nodes/pods` instead); `escalate`, `bind` or `impersonate`; a `ClusterRole` meant for one namespace granted in every namespace through a `ClusterRoleBinding` instead of a namespaced `RoleBinding`; aggregated ClusterRoles picking up new rules. Verify effective permissions, not the YAML you wrote:
 
 ```bash
 kubectl auth can-i --list --as=system:serviceaccount:payments:api -n payments

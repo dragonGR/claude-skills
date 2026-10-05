@@ -1,6 +1,6 @@
 ---
 name: nodejs-engineering
-description: Node.js in production covering crashes and shutdown, server timeouts behind load balancers, memory limits in containers, the libuv thread pool, request context, child processes, hashing, inspector debugging, and upgrading Node and npm dependencies. Load it before writing or reviewing Node servers, workers or CLIs, before an upgrade, and when a Node process leaks, hangs, crashes or returns 502s.
+description: The Node.js process in production: crash policy, SIGTERM shutdown code, keep-alive and request timeouts behind load balancers, heap limits in containers, the libuv thread pool, child processes, inspector debugging, crash diagnostics, Node version upgrades. Load it for Node servers, workers and CLIs, and when one leaks, hangs, crashes or returns 502s.
 license: MIT
 metadata:
   author: Alex Tsanis
@@ -8,7 +8,7 @@ metadata:
 
 # Node.js engineering
 
-Most Node incidents are not language bugs. They are runtime behavior nobody configured: a keep-alive timeout shorter than the load balancer's, a heap limit larger than the container, four thread-pool slots shared by DNS and file reads, a process that keeps serving after its state is corrupt, an upgrade merged because the tests were green. This skill covers the runtime, how to run it and how to upgrade it. Type design, validation, async correctness and numbers belong to the typescript-engineering skill; security review belongs to security-engineering; Ethereum hashing and contracts belong to solidity-engineering.
+Most Node incidents are not language bugs. They are runtime behavior nobody configured: a keep-alive timeout shorter than the load balancer's, a heap limit larger than the container, four thread-pool slots shared by DNS and file reads, a process that keeps serving after its state is corrupt, a shutdown that waits on sockets nobody closes. This skill covers the process as a deployed thing: how it crashes, stops, uses memory and threads, how to debug it and how to move it to a new Node major. Code-level correctness (types, validation, async patterns, numbers), npm dependencies and supply chain, and non-Node runtimes belong to typescript-engineering; the language-neutral shutdown sequence to backend-architecture; container entrypoints and probes to infrastructure-ops; security review to security-engineering.
 
 Check the Node version first (`node --version`, `engines`, `.nvmrc`, the Docker base image). Defaults below are for current releases; several have changed between majors.
 
@@ -16,27 +16,114 @@ Check the Node version first (`node --version`, `engines`, `.nvmrc`, the Docker 
 
 ### Crashes and process lifecycle
 
-**Continuing after `uncaughtException`.** A handler that logs and carries on leaves the process running with half-finished state: a transaction never committed, a lock never released, a counter never decremented. Node's own docs say the process is in an undefined state at that point. Log with full context, flush, and exit non-zero so the supervisor restarts a clean process.
+**Continuing after `uncaughtException`.** A handler that logs and carries on leaves the process running with half-finished state: a transaction never committed, a lock never released, a counter never decremented. Node's own docs say the process is in an undefined state at that point. Do synchronous cleanup only, log with full context, and exit non-zero without draining, so the supervisor restarts a clean process.
 
 **Silencing unhandled rejections.** Since Node 15 the default mode is `throw`, so an unhandled rejection ends the process. Adding `process.on('unhandledRejection', console.error)` turns that crash into silent data loss. Fix the floating promise. Keep the default, or log and exit.
 
-**Shutdown that drops work or never finishes.** On SIGTERM the handler calls `process.exit()` at once and cuts off in-flight requests, or it calls `server.close()` and waits forever, because `close()` stops new connections but idle keep-alive sockets stay open. A correct sequence: mark the instance not ready, keep serving through a short drain delay so the load balancer stops routing, `server.close()`, `server.closeIdleConnections()` (Node 18.2+), wait for in-flight requests, stop consumers and timers, close pools, then exit. Put a hard deadline under the orchestrator's grace period that calls `server.closeAllConnections()` and exits non-zero.
+**Shutdown that drops work or never finishes.** On SIGTERM the handler calls `process.exit()` at once and cuts off in-flight requests, or it waits on `server.close()` until the orchestrator's SIGKILL. Since Node 19, `close()` destroys the connections it considers idle at that moment. A connection still serving a request gets its response with `Connection: keep-alive` and then stays open for `keepAliveTimeout` plus `keepAliveTimeoutBuffer`, and the close callback waits for it. With the keep-alive timeout raised above the load balancer's (below), that is over a minute, past Kubernetes' default 30-second grace period. Calling `closeIdleConnections()` again does not fix it: Node counts a connection as idle once the request has been read and `end()` has been called on the response, even while that response is still being written to a slow client, so both `close()` and a sweep cut such a response off. End each connection when its response finishes, and call `close()` only when no response is mid-flush:
 
-**`process.exit()` cutting off output.** Writes to stdout and stderr can be asynchronous when they are pipes, which is the normal case in containers. `process.exit()` right after a log line can lose the line that explained the failure. Set `process.exitCode` and let the event loop drain, or exit only after the logger flushes.
+```ts
+import type { Server, ServerResponse } from "node:http";
+import { setTimeout as delay } from "node:timers/promises";
 
-**Signals that never arrive.** `npm start` or a shell-form container command puts a wrapper in front of Node, and SIGTERM stops there. Start `node` directly, or use an init process. The infrastructure-ops skill covers container entrypoints.
+export function installShutdown(
+  server: Server,
+  deps: {
+    log: Logger;
+    markNotReady(): void;
+    stopConsumers(): Promise<void>;
+    closePools(): Promise<void>;
+    flushLogs(): Promise<void>;
+  },
+  cfg: { drainDelayMs: number; deadlineMs: number },
+): void {
+  let stopping = false;
+  let closing = false;
+  const active = new Set<ServerResponse>();
+
+  // Prepended so it runs before the app's handler has sent headers.
+  server.prependListener("request", (req, res) => {
+    active.add(res);
+    if (stopping) res.setHeader("Connection", "close");
+    res.once("finish", () => {
+      if (closing) req.socket.end();
+    });
+    res.once("close", () => active.delete(res));
+  });
+
+  const closeServer = async (): Promise<void> => {
+    closing = true;
+    // close() destroys a connection whose response has ended but is still being written.
+    for (;;) {
+      const flushing = [...active].filter((res) => res.writableEnded && !res.writableFinished);
+      if (flushing.length === 0) break;
+      await Promise.all(flushing.map((res) => new Promise((resolve) => res.once("close", resolve))));
+    }
+    await new Promise<void>((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()));
+    });
+  };
+
+  const shutdown = async (): Promise<void> => {
+    deps.markNotReady();
+    await delay(cfg.drainDelayMs);
+    await Promise.all([closeServer(), deps.stopConsumers()]);
+    await deps.closePools();
+  };
+
+  const exit = (): void => {
+    void deps.flushLogs().then(
+      () => process.exit(),
+      () => process.exit(),
+    );
+  };
+
+  const onSignal = (signal: NodeJS.Signals): void => {
+    if (stopping) return;
+    stopping = true;
+    deps.log.info({ signal }, "shutdown started");
+    const deadline = setTimeout(() => {
+      deps.log.error({}, "shutdown deadline reached, closing remaining connections");
+      process.exitCode = 1;
+      server.closeAllConnections();
+      exit();
+    }, cfg.deadlineMs);
+    deadline.unref();
+    shutdown().then(exit, (err: unknown) => {
+      deps.log.error({ err }, "shutdown failed");
+      process.exitCode = 1;
+      exit();
+    });
+  };
+
+  process.once("SIGTERM", onSignal);
+  process.once("SIGINT", onSignal);
+}
+```
+
+What each part is for, checked on Node 26.10 with `keepAliveTimeout: 8000`:
+
+- `'finish'` fires once the whole response has been handed to the operating system, so `socket.end()` there closes the connection without cutting the response short. Without it, a request in flight when `close()` ran held the close callback for 9 seconds after its response; with it, the process exited as the response completed.
+- The `flushing` wait protects responses that are mid-write when `close()` runs. A slow client reading a 64 MiB response was reset after 11 to 20 MB in three runs where `server.close()` ran mid-write, and received the whole body with the wait in place.
+- `Connection: close` on responses that start after SIGTERM tells the client and the load balancer not to reuse the connection. The listener has to be prepended: an app that answers synchronously has already sent its headers by the time a listener added with `on` runs, and `setHeader` then throws `ERR_HTTP_HEADERS_SENT`.
+- The signal listener is synchronous because a rejected `async` listener is an unhandled rejection.
+- At the deadline, `closeAllConnections()` lets the server close so consumers and pools still shut down, and the exit code is 1. `deadlineMs` counts from SIGTERM and has to end a few seconds before the grace period does, or SIGKILL arrives first and no handler sees it.
+
+The language-neutral sequence and why the drain delay exists are in backend-architecture's api-and-lifecycle reference; probe configuration and signal delivery to PID 1 are in infrastructure-ops.
+
+**`process.exit()` cutting off output.** Writes to stdout and stderr are asynchronous when they are pipes on POSIX, which is the normal case in containers. `process.exit()` right after a log line can lose the line that explained the failure. Set `process.exitCode` and let the event loop drain, or exit only after the logger flushes, as `exit()` above does.
+
+**Signals that never arrive.** A shell-form container command (`CMD npm start` as a plain string) runs under `/bin/sh -c`, which may not pass SIGTERM on, and a PID 1 process with no SIGTERM handler ignores the signal. npm 12 forwards SIGTERM to a script's process, but every wrapper is one more place for signals and exit codes to go wrong. Use the exec form and start `node` directly, or use an init process. The infrastructure-ops skill covers container entrypoints.
 
 ### HTTP servers behind a proxy
 
-**Keep-alive timeout shorter than the load balancer's idle timeout.** The load balancer reuses a connection the Node server has just closed and returns a 502 or the client sees `ECONNRESET`. It happens at low traffic, a few times an hour, and is hard to reproduce. `server.keepAliveTimeout` defaults to 5 seconds in current releases, while common load balancers keep idle connections for 60 seconds or more. Set it above the proxy's idle timeout, from configuration, and verify the effective value in the running process. Node 22.19 and 24.6 added `server.keepAliveTimeoutBuffer`, and Node's main branch raises the keep-alive default to 65 seconds, so check your version before relying on any default.
+**Keep-alive timeout shorter than the load balancer's idle timeout.** The load balancer reuses a connection the Node server has just closed and returns a 502, or the client sees `ECONNRESET`. It happens at low traffic, a few times an hour, and is hard to reproduce. `server.keepAliveTimeout` is 5 seconds on Node 26.10 and earlier, while common load balancers keep idle connections for 60 seconds or more. Set it above the proxy's idle timeout, from configuration, and check the value in the running process. `server.keepAliveTimeoutBuffer` (Node 22.19 and 24.6 and later, default 1 second) keeps the socket open that much longer than the timeout advertised to clients. An unreleased change on Node's main branch raises the default to 65 seconds; set the value explicitly either way, and make sure shutdown copes with it (above).
 
 **Request timeouts left at defaults.** `server.requestTimeout` is 300 seconds and `server.headersTimeout` is at most 60 seconds. A client that trickles a body ties up a socket for five minutes. Set request and header timeouts for your workload, cap body size in the parser, and put deadlines on every outbound call.
 
-**Trusting forwarded headers.** `X-Forwarded-For` and `X-Forwarded-Proto` are client-writable unless your proxy overwrites them. Trust exactly the number of proxy hops you run.
-
 ### Memory
 
-**Heap limit that does not match the container.** The process is killed by the kernel with no JavaScript error, or it spends its last minutes in garbage collection. Check the limit the process actually got (`v8.getHeapStatistics().heap_size_limit`) inside the container. Set `--max-old-space-size` (MiB) or `--max-old-space-size-percentage` explicitly, and leave headroom under the container limit for memory outside the V8 heap: Buffers, native modules, thread stacks and code.
+**Heap limit that does not match the container.** The process is killed by the kernel with no JavaScript error, or it spends its last minutes in garbage collection. Without flags, Node sizes the heap from the cgroup memory limit: on Node 26.10, a 512 MiB container got a 268 MiB heap and an 8 GiB container about 2 GiB, with a cap near 4 GiB on large hosts. The failures come from a hard-coded `--max-old-space-size` copied from a bigger machine, from growth outside the heap (Buffers, native modules, thread stacks, code), or from a large container where the default cap leaves memory unused. Prefer `--max-old-space-size-percentage`, which also reads the cgroup limit, over a literal MiB value, leave headroom for off-heap memory, and check `v8.getHeapStatistics().heap_size_limit` inside the container.
 
 **Leaks that look like caches.** A module-level `Map` keyed by user or request id, memoization without eviction, a listener added per request to a long-lived emitter, a closure in a retry queue holding the whole request. Bound every cache by size and age. Confirm a leak with heap snapshots taken before and after a repeated workload, not with RSS alone.
 
@@ -56,7 +143,7 @@ Check the Node version first (`node --version`, `engines`, `.nvmrc`, the Docker 
 
 ### Request context
 
-**Request data in module scope.** A module variable holding the current user or tenant is shared by every concurrent request. Carry it with `AsyncLocalStorage`, entered once per request in the outermost middleware, and pass explicit arguments where the call path is short. Check that context survives your database driver and queue client, since some callback-based libraries lose it.
+**Request data in module scope.** A module variable holding the current user or tenant is shared by every concurrent request. Pass identity, tenant and permissions as explicit arguments: anything that authorizes or filters data must not depend on ambient context. `AsyncLocalStorage` can lose its store (some callback-based drivers and queue clients drop it) and can hand it to work that outlives the request, such as an interval, a cached promise or a listener registered during the request. Code reading `als.getStore()?.tenantId` then gets `undefined` or another request's tenant, and an `undefined` filter can mean no filter. Use `AsyncLocalStorage`, entered once per request in the outermost middleware, for request ids, log fields and trace context, where a lost store degrades logs instead of leaking data.
 
 ### Child processes
 
@@ -65,12 +152,6 @@ Check the Node version first (`node --version`, `engines`, `.nvmrc`, the Docker 
 **Output limits and pipes.** `execFile` and `exec` buffer output and fail when it exceeds `maxBuffer`. A `spawn` whose stdout nobody reads can block the child once the pipe fills. Stream output, or set limits deliberately.
 
 **Orphaned children.** Killing the parent does not kill a detached child or its descendants. Track children, kill them on shutdown, and put a timeout on every one.
-
-### Crypto and hashing
-
-**Hashing or signing `JSON.stringify` output.** Key order and number formatting are not canonical, so two services hash the same object differently. Sign a canonical encoding (a fixed field order, RFC 8785 JSON canonicalization, or EIP-712 typed data for wallet signatures), never ad hoc JSON.
-
-**Encoding mismatches.** `Buffer.from(str)` assumes UTF-8; hex strings need `'hex'`, and `'base64'` and `'base64url'` are different alphabets. Hashing `'0xabc...'` as text instead of as bytes is a common source of mismatched signatures. Decide the byte representation once, at the boundary.
 
 ### Debugging and diagnostics
 
@@ -82,47 +163,40 @@ Check the Node version first (`node --version`, `engines`, `.nvmrc`, the Docker 
 
 Commands, recipes and a leak-hunting procedure: [references/debugging-and-diagnostics.md](references/debugging-and-diagnostics.md).
 
-### Upgrades
+### Node upgrades
 
-**Upgrading everything at once.** One pull request bumps Node, the framework, the ORM and forty libraries. Something breaks, and nobody can tell which change did it or roll back one part. Upgrade one major version of one thing at a time, behind passing tests, and deploy it before starting the next.
+**Node majors treated like a library bump.** A Node major changes V8, OpenSSL, the bundled npm, HTTP defaults and the module ABI, and removes APIs and flags deprecated earlier. Native modules must be rebuilt. Read the release notes for every major you cross, update the version in every place that installs Node (`engines`, `.nvmrc`, CI, Docker base image, serverless runtime) in one change, and run the full suite plus a staging deploy.
 
-**Trusting semver.** Minor and patch releases change behavior: a default, a timeout, an error type, a transitive dependency. `0.x` packages promise nothing. Read the changelog and the migration guide for every version you skip, and treat "it compiles" as the start of testing, not the end.
+**A new npm arriving with the toolchain.** A newer Node or CI image can bring a new npm major. npm 12 skips dependency install scripts that `allowScripts` does not list, so a native package installs cleanly and fails on first use. Policy and commands are in typescript-engineering's tooling-and-supply-chain reference.
 
-**Node majors treated like a library bump.** A Node major changes the bundled OpenSSL, V8, npm, default timeouts and deprecated APIs, and native modules must be rebuilt. Read the release notes for every major you cross, update the version in every place that installs Node (`engines`, `.nvmrc`, CI, Docker base image, serverless runtime), and run the full suite plus a staging deploy.
-
-**Silencing conflicts instead of resolving them.** `--legacy-peer-deps`, `--force` or an override that pins a transitive version makes the install pass and leaves two incompatible copies at runtime, or a library running against a peer it was never tested with. Resolve the conflict, or document the override with the reason and a date to remove it.
-
-**Adopting releases the day they ship.** Compromised packages are usually caught within days. Give new versions a waiting period before automated updates pick them up (Renovate `minimumReleaseAge`, Dependabot `cooldown`), except for security fixes.
-
-Planning, commands, codemods, automation and rollback: [references/dependency-upgrades.md](references/dependency-upgrades.md).
+Release schedule, what breaks between majors, and the upgrade procedure: [references/node-upgrades.md](references/node-upgrades.md).
 
 ## Decision rules
 
-- **Version:** run an active LTS release (even-numbered majors) in production, pin it in `engines`, `.nvmrc` and the base image, and test the next LTS in CI before the current one reaches end of life.
+- **Version:** run a release in its LTS phase (Active or Maintenance) and move before its end-of-life date. Through Node 26 only even-numbered majors become LTS; from Node 27 there is one major a year and each becomes LTS after six months as Current. Pin it in `engines`, `.nvmrc` and the base image, and run the next LTS in CI before switching.
 - **Crash or recover:** recover from expected, scoped errors inside the request that caused them. Exit on anything that reaches the process level.
 - **Worker threads or a separate service:** a pool of `worker_threads` for CPU work measured in tens or hundreds of milliseconds per task; a separate service or queue when work takes seconds, needs isolation or must survive a deploy.
 - **Cluster or replicas:** in containers, run one Node process per container and scale with replicas. Use `cluster` only on hosts you manage directly.
 - **`NODE_ENV`:** set it to `production` in production because libraries change behavior on it, and never use it for application feature flags.
-- **Permission model:** for scripts that process untrusted files, consider `--permission` (stable since 22.13 and 23.5) to restrict filesystem, child process and worker access.
+- **Permission model:** for trusted scripts that process untrusted files, run with `--permission` (stable from 22.13) and explicit `--allow-fs-read`/`--allow-fs-write` paths. From Node 25 it also blocks network access unless `--allow-net` is given. It catches mistakes in trusted code; Node's docs say malicious code can bypass it, so it is not a sandbox for untrusted code or dependencies.
 
 ## Review checklist
 
-- Does the process exit non-zero on uncaught exceptions and unhandled rejections, after logging?
-- Does SIGTERM drain: not ready, drain delay, close the listener, close idle connections, finish in-flight work, close pools, hard deadline under the grace period?
+- Does the process exit non-zero on uncaught exceptions and unhandled rejections, after logging, without draining after `uncaughtException`?
+- Does SIGTERM drain: not ready, drain delay, connections ended as their responses finish, `server.close()` only when no response is mid-flush, consumers stopped, pools closed, and a deadline inside the grace period that closes all connections?
 - Is `keepAliveTimeout` above the load balancer's idle timeout, set from configuration and checked in the running process?
 - Are request, header and body limits set for the workload, and does every outbound call have a deadline?
-- Is the heap limit set explicitly, with headroom under the container limit for off-heap memory?
-- Is every cache bounded, and is no request data stored in module scope?
+- Is the heap limit either the cgroup-derived default or a percentage, with headroom for off-heap memory, and checked inside the container?
+- Is every cache bounded, is no request data stored in module scope, and are identity and tenant passed explicitly rather than read from `AsyncLocalStorage`?
 - Is `UV_THREADPOOL_SIZE` set in the environment where the workload hashes, compresses or reads files heavily?
 - Is CPU-heavy work off the main thread, and is event loop delay exported as a metric?
 - Do child processes have `'error'` handlers, timeouts, output limits and cleanup on shutdown?
-- Is every override, forced install or skipped peer dependency documented with a reason and removal date?
-- Are signatures and hashes computed over a canonical encoding?
 - Is the inspector bound to localhost only, and are crash diagnostics written somewhere private?
-- Is the Node version an active LTS, pinned in every place that installs Node?
-- Does each upgrade change one major version of one thing, with its changelog read and a rollback ready?
+- Is the Node version in its LTS phase, pinned in every place that installs Node, and is the next upgrade planned before end of life?
 
 ## References
 
 - [references/debugging-and-diagnostics.md](references/debugging-and-diagnostics.md): read when you need to attach a debugger, step through code, debug tests or TypeScript, profile CPU, find a memory leak, diagnose a hang or capture evidence from a crash.
-- [references/dependency-upgrades.md](references/dependency-upgrades.md): read before upgrading Node, a framework or a major dependency, when reviewing an upgrade pull request, or when configuring Renovate or Dependabot.
+- [references/node-upgrades.md](references/node-upgrades.md): read before moving to a new Node major, when reviewing that pull request, or when choosing which Node release to run.
+
+Related skills: typescript-engineering for async correctness, validation, dependency upgrades and supply chain, Workers and Bun; backend-architecture for the shutdown sequence, retries and idempotency; infrastructure-ops for container entrypoints, probes and Kubernetes; security-engineering for authorization and threat modeling; performance-benchmarking before optimizing.

@@ -1,6 +1,6 @@
 # Async code and resource lifetimes
 
-Read this when writing or reviewing promise-heavy code: fan-out over lists, outbound HTTP, background work, streams, timers, or graceful shutdown.
+Read this when writing or reviewing promise-heavy code: fan-out over lists, outbound HTTP, background work, streams or timers.
 
 The question to ask of every promise, timer, listener and stream is who owns it: who observes its failure, who stops it, and what happens to it when the request, the invocation or the process ends. Code without an answer leaks, loses errors or does work after the caller has reported failure.
 
@@ -17,7 +17,7 @@ The question to ask of every promise, timer, listener and stream is who owns it:
 
 ### Stopping siblings on first failure
 
-`Promise.all` rejects as soon as one input rejects and does nothing to the others. They only stop if they honour a signal you abort.
+`Promise.all` rejects as soon as one input rejects and does nothing to the others. They only stop if they honor a signal you abort.
 
 ```ts
 async function bestQuote(req: QuoteRequest, providers: readonly QuoteProvider[]): Promise<Quote[]> {
@@ -112,7 +112,7 @@ Points a reviewer checks:
 - `fetch` resolves for 4xx and 5xx. Code that reads `await res.json()` without `res.ok` parses an error page as data.
 - Every body is consumed or cancelled. undici otherwise leaves connection release to the garbage collector, and the pool can run dry.
 - A timeout rejects with a `DOMException` named `TimeoutError`; an abort from the caller's signal is an `AbortError`. Map them differently if the caller cares.
-- A timed-out or reset write is an unknown outcome. Retry only idempotent requests or requests carrying an idempotency key the server honours, with capped attempts and jittered backoff, and never retry on 4xx other than 408 and 429. The protocol side lives in backend-architecture.
+- A timed-out or reset write is an unknown outcome. Retry only idempotent requests or requests carrying an idempotency key the server honors, with capped attempts and jittered backoff, and never retry on 4xx other than 408 and 429. The protocol side lives in backend-architecture.
 - The URL is built with `new URL(path, base)` from a fixed path template, with user values in path segments passed through `encodeURIComponent` and query values set through `URLSearchParams`. Never pass user input as the whole `path`: `new URL("https://evil.example", base)` ignores `base` (SSRF is covered in security-engineering).
 
 ## Background work in a Node server
@@ -157,29 +157,9 @@ On Workers the equivalent owner is `ctx.waitUntil` (`references/runtimes.md`).
 
 ## Graceful shutdown
 
-```ts
-async function shutdown(): Promise<void> {
-  await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
-  await background.drain(config.shutdownGraceMs);
-  await db.$disconnect();
-}
+`BackgroundTasks.drain` runs in the shutdown sequence after the HTTP server has closed, alongside stopping queue consumers. The sequence itself (readiness, drain delay, a deadline under the grace period) is in backend-architecture's api-and-lifecycle reference, and the Node server code, including the keep-alive connections that hold `server.close()` open, is in nodejs-engineering. Register the signal listener as a synchronous function that starts the async shutdown and handles both outcomes, because a rejected `async` listener is an unhandled rejection.
 
-process.once("SIGTERM", () => {
-  const hardStop = setTimeout(() => process.exit(1), config.shutdownHardLimitMs);
-  hardStop.unref();
-  shutdown().then(
-    () => process.exit(0),
-    (err: unknown) => {
-      log.fatal({ err }, "shutdown failed");
-      process.exit(1);
-    },
-  );
-});
-```
-
-The signal listener is synchronous on purpose: an `async` listener's rejection would be unhandled. The hard stop exists because keep-alive connections or a stuck dependency can hold `server.close` open past the orchestrator's kill deadline.
-
-For `unhandledRejection` and `uncaughtException`, log with the error, set a failing exit code and shut down. Node's documentation is explicit that resuming after `uncaughtException` is not safe, and a process-wide handler that only logs turns crashes into silent corruption.
+After `uncaughtException`, log synchronously and exit non-zero without draining: the process state is undefined, and Node's documentation says resuming is not safe. An unhandled rejection already ends the process under Node's default `throw` mode. The fix is the floating promise that caused it; a process-wide handler that only logs turns crashes into silent corruption. Crash policy is owned by nodejs-engineering.
 
 ## Cancellation plumbing
 

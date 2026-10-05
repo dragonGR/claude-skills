@@ -2,7 +2,7 @@
 
 Read this when code accepts data from outside the process (HTTP bodies, query strings, headers, webhooks, queue messages, environment, files, third-party APIs) or passes it to a shell, the filesystem, object keys or a regex.
 
-Authorization, SSRF, sessions and threat modelling are in security-engineering. This file covers the TypeScript and Node mechanics that make those controls hold.
+Authorization, SSRF, sessions and threat modeling are in security-engineering. This file covers the TypeScript and Node mechanics that make those controls hold.
 
 ## Request bodies
 
@@ -37,14 +37,14 @@ In Prisma `data`, a field set to `undefined` means "leave unchanged", which is w
 
 ### One schema per trust level
 
-A shared `UserSchema` used by both the admin endpoint and the self-service endpoint gives the self-service endpoint the `role` field. Define the client-facing schema separately, or derive it with `.pick` / `.omit` and review the derived shape. In Zod 4, `.merge` is deprecated in favour of `.extend`.
+A shared `UserSchema` used by both the admin endpoint and the self-service endpoint gives the self-service endpoint the `role` field. Define the client-facing schema separately, or derive it with `.pick` / `.omit` and review the derived shape. In Zod 4, `.merge` is deprecated in favor of `.extend`.
 
 ### Query strings and headers
 
 - A repeated key (`?id=1&id=2`) arrives as an array in most parsers. Schema-validate query objects like bodies.
 - Numbers: `z.coerce.number()` turns `""` into `0`. Use `z.string().regex(DIGITS).transform(Number).pipe(z.number().int().min(1).max(limits.pageSizeMax))` or reject empty strings before coercing.
 - Booleans: `z.stringbool()` in Zod 4. `z.coerce.boolean()` and `Boolean(value)` make `"false"` true.
-- Headers such as `X-Forwarded-For`, `X-User-Id` or `X-Tenant` are client-controlled unless a proxy you control strips and sets them. Trust them only behind that proxy, and configure the framework's trusted-proxy setting instead of parsing them yourself.
+- Headers such as `X-Forwarded-For`, `X-Forwarded-Proto`, `X-User-Id` or `X-Tenant` are client-controlled unless a proxy you control strips and sets them. Trust them only behind that proxy, and configure the framework's trusted-proxy setting instead of parsing them yourself. Trust exactly the number of proxy hops you run (Express `app.set("trust proxy", hops)` from configuration). `true` makes Express take the left-most `X-Forwarded-For` entry, which the client wrote.
 
 ### Third-party responses
 
@@ -106,6 +106,11 @@ export function hasValidSignature(rawBody: Buffer, signatureHex: string, secret:
 The length check leaks only the digest length, which is public. For tokens of variable length, compare HMACs or SHA-256 digests of both sides instead. Workers use `crypto.subtle.timingSafeEqual` (`references/runtimes.md`).
 
 Tokens, session ids, reset codes and invite codes come from `crypto.randomBytes`, `crypto.randomUUID` or `crypto.getRandomValues`; numeric codes from `crypto.randomInt`. `Math.random` output can be predicted from earlier outputs. Store only a hash of long-lived tokens.
+
+## Hashing and signing
+
+- Do not hash or sign `JSON.stringify` output that another service has to reproduce. Keys come out in insertion order, so `{a, b}` and `{b, a}` serialize differently, and number formatting is not canonical either. Sign a canonical encoding: a fixed field order you serialize yourself, RFC 8785 JSON canonicalization, or EIP-712 typed data for wallet signatures (solidity-engineering). Webhooks are the exception in the other direction: verify over the raw bytes you received.
+- Decide the byte representation once, at the boundary. `Buffer.from(str)` is UTF-8 and hex needs `'hex'`. `Buffer.from("0xabcd", "hex")` returns an empty Buffer with no error, because decoding stops at the `x`, and hashing `"0xabcd"` as text instead of as two bytes produces signatures that never match. `toString("base64")` and `toString("base64url")` use different alphabets while Node's decoder accepts both, so the mismatch shows up only in the other system.
 
 ## Shell commands
 

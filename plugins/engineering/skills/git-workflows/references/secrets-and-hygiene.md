@@ -75,10 +75,10 @@ git submodule update --init --recursive
 ```sh
 git clone --filter=blob:none <url>
 git sparse-checkout set <dir> <dir>
-git maintenance start
+git maintenance run
 ```
 
-A blobless partial clone downloads file contents on demand. Sparse checkout limits the working tree to the directories you need. `git maintenance start` schedules background maintenance tasks such as prefetch and commit-graph updates.
+A blobless partial clone downloads file contents on demand. Sparse checkout limits the working tree to the directories you need. `git maintenance start` schedules hourly prefetch and commit-graph updates, but it writes `maintenance.repo` into the user's global config and installs a cron entry or systemd timer, so ask before running it. `git maintenance run` does one pass and schedules nothing.
 
 ## Signing commits
 
@@ -86,10 +86,11 @@ A blobless partial clone downloads file contents on demand. Sparse checkout limi
 git config gpg.format ssh
 git config user.signingkey <path-to-public-key>
 git config commit.gpgsign true
+git config gpg.ssh.allowedSignersFile .git/allowed_signers   # lines of "<email> <public key>"
 git log --show-signature -n 5
 ```
 
-Signing proves a commit came from a key you control. It matters only if the platform verifies it: require signed commits in branch protection, and register the signing key with the platform. Set these in the repository or ask the user before changing global configuration.
+Without an allowed-signers file, `--show-signature` prints an error and "No signature" even for a correctly signed commit, which looks like signing failed when only local verification is unconfigured. Signing proves a commit came from a key you control. It matters only if the platform verifies it: require signed commits in branch protection, and register the signing key with the platform. Set these in the repository or ask the user before changing global configuration.
 
 ## Hooks
 

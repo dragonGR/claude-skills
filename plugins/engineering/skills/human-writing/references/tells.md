@@ -186,15 +186,19 @@ When the draft is in a file, run each pattern with the Grep tool (`output_mode: 
 | Dashes | `[\x{2014}\x{2013}]\|[^\s>] -{1,2} \S` |
 | Vocabulary | `(?i)\b(delv\|tapestr\|landscape\|realm\|foster\|streamlin\|elevat\|unlock\|empower\|robust\|seamless\|navigat\|journey\|crucial\|pivotal\|vital\|essential\|boast\|nestled\|vibrant\|intricat\|meticulous\|holistic\|leverag\|utiliz\|facilitat\|comprehensive\|cutting-edge\|game-chang\|testament\|underscor\|showcas\|myriad\|plethora\|bolster\|garner\|interplay\|synerg\|paradigm\|embark\|ever-evolving\|fast-paced)\w*` |
 | Signposts and connectives | `(?i)\b(moreover\|furthermore\|additionally\|in conclusion\|in summary\|to sum up\|ultimately\|notably\|importantly\|when it comes to\|at the end of the day\|in today['’]?s\|let['’]?s (dive\|explore\|take a)\|as mentioned (above\|earlier)\|it['’]?s (important\|worth) (to note\|noting\|mentioning))\b` |
+| Signposts and wrap-ups at sentence start | `(?i)(^\|[.!?]\s+)(overall\|all in all\|in addition\|what['’]?s more\|keep in mind)\b\|\bit is (important\|worth) (to note\|noting\|mentioning)\b` |
 | Contrast templates | `(?i)\bnot only\b\|\bnot just\b\|\bit['’]?s not about\b\|\bisn['’]?t just\b` |
 | Participial tails | `, (ensuring\|highlighting\|underscoring\|emphasizing\|showcasing\|reflecting\|demonstrating\|making it\|allowing\|enabling\|paving\|fostering\|contributing)\b` |
-| Copula avoidance | `(?i)\b(serves\|stands\|acts\|functions) as\b\|\bboasts\b` |
+| Copula avoidance | `(?i)\b(serves\|stands\|acts\|functions) as\b\|\b(boasts\|represents)\b` |
+| Intensifiers | `(?i)\b(truly\|incredibly\|extremely\|highly\|deeply\|remarkably)\b` |
 | Stacked hedges | `(?i)\b(may\|might\|could\|can) (potentially\|possibly\|perhaps)\b\|\bit could be argued\b` |
 | Reveals | `(?i)\b(the (result\|catch\|kicker\|best part)\|here['’]?s the (thing\|deal\|catch))[?:]` |
 | Chat residue | `(?i)great question\|absolutely right\|i hope this (helps\|email finds)\|feel free to\|don['’]?t hesitate\|rest assured\|any inconvenience\|patience and understanding\|as of my last` |
 | Bold-label bullets | `^[\s>]*([-*+]\|\d+\.) \*\*[^*]+\*\*` |
 | Capitalized words in headings | `^#{1,6} +\S+.* [A-Z][a-z]` |
-| Emoji | `\p{Extended_Pictographic}` |
+| Emoji | `[\p{Extended_Pictographic}--[\x{A9}\x{AE}\x{2122}]]` |
 | Artifacts | `(?i)oaicite\|contentreference\|turn\d+search\d+\|\[cite: ?\d+\]\|\[(your\|insert) [^\]]*\]` |
 
-The table escapes `|` as `\|` for Markdown; pass the pattern to Grep with plain `|`.
+The table escapes `|` as `\|` for Markdown; pass the pattern to Grep with plain `|`. The emoji pattern leaves out ©, ® and ™, which Unicode also counts as pictographic; its class subtraction (`--`) works in ripgrep and the Grep tool but not in `grep -P`.
+
+The patterns catch the common cases. The rest of the word list and phrase bank is checked by reading.

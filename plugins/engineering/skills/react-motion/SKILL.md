@@ -1,6 +1,6 @@
 ---
 name: react-motion
-description: Animation in React with Motion (framer-motion or motion/react) and GSAP: exits, layout animation, route transitions with React Router, scroll effects, ScrollTrigger pinning, reduced motion and frame performance. Load it before writing or reviewing any animation code, even one transition, and when an animation janks, leaks, skips its exit or breaks focus.
+description: Animation in React with Motion (motion/react or framer-motion), GSAP and view transitions: exits, layout animation, React Router route transitions, scroll effects, ScrollTrigger pins, reduced motion and frame cost. Load before writing or reviewing any animation code, and when one janks, leaks, skips its exit or breaks focus.
 license: MIT
 metadata:
   author: Alex Tsanis
@@ -10,7 +10,7 @@ metadata:
 
 Animation bugs rarely throw. They slide the wrong row out, strand focus in a dialog that is fading away, re-render the page on every scroll frame, leak ScrollTriggers into the next route, hide the headline until JavaScript arrives, or make a user with a vestibular disorder feel sick. Write animation code for the conditions it will actually meet: interrupted, doubled, navigated away from mid-exit, reduced and running on a throttled phone. Every animation also has to earn its place: if it does not explain a change, guide attention or confirm an action, remove it.
 
-Before writing anything, read `package.json` and the lockfile: `motion` or `framer-motion` (and whether both are present), `gsap` and `@gsap/react`, the React major (React 19 takes `inert` as a boolean), and how React Router is mounted. Declarative mode (`<BrowserRouter>` with `<Routes>`) and data mode (`createBrowserRouter` with `<RouterProvider>`) need different route-transition code, and `<ScrollRestoration>` exists only in data mode. Motion for React needs React 18.2 or later. Match the installed APIs, not memory.
+Before writing anything, read `package.json` and the lockfile: `motion` or `framer-motion` (and whether both are present), `gsap` and `@gsap/react`, the React version (React 19 takes `inert` as a boolean; 19.3 made `<ViewTransition>` stable), and how React Router is mounted. Declarative mode (`<BrowserRouter>` with `<Routes>`) and data mode (`createBrowserRouter` with `<RouterProvider>`) need different route-transition code, and `<ScrollRestoration>` exists only in data mode. Motion for React needs React 18.2 or later. Match the installed APIs, not memory.
 
 `framer-motion` and `motion` are the same library. `motion/react` re-exports `framer-motion`, the `motion` package depends on `framer-motion` at its own version, and both are published on the same version line. Importing from `framer-motion` is supported; do not rewrite a codebase's imports to `motion/react` as a fix. The lazy `m` components live at `framer-motion/m`, which `motion/react-m` re-exports. Use whichever path the codebase already uses, and only one of them.
 
@@ -30,7 +30,7 @@ Each entry: what it looks like in a diff, why it breaks, what to do instead. Lon
 
 **Exiting content still interactive.** During an exit the DOM stays mounted. A second click on "Delete" in a closing dialog sends a second request, Tab reaches links in a panel that is leaving, and screen readers read it. Read `useIsPresent()` in the exiting component and set `inert` on it when not present (a boolean on React 19; on React 18 pass `inert=""` when inert and omit it otherwise).
 
-**Focus lost when an animated modal closes or a route changes.** Focus returns to the trigger only when the dialog unmounts, which is after the exit, or never if the trigger was the row that was just deleted. Focus lands on `<body>` and keyboard and screen-reader users lose their place. Move focus in the close handler, before the exit starts: to the trigger if it still exists, otherwise to the next row, the list heading or the region that changed. On open, move focus into the dialog on mount rather than in `onAnimationComplete`. A dialog primitive still owns the focus trap and `aria-modal`; Motion only animates its visual lifetime (Radix exposes `forceMount` so the content stays mounted during the exit). React Router moves no focus on navigation; see the route entries below and the `accessibility` skill for the full dialog and route-change contract.
+**Focus lost when an animated modal closes or a route changes.** Focus returns to the trigger only when the dialog unmounts, which is after the exit, or never if the trigger was the row that was just deleted. Until then it sits in content that is leaving (and `inert`, if you followed the entry above), so keyboard and screen-reader users lose their place. Who moves it depends on the dialog. Native `<dialog>`: keep it mounted, outside `AnimatePresence`, animate it in CSS, and let `close()` return focus; while it is modal the rest of the page is inert, so focusing the trigger earlier does nothing. Radix (content kept mounted with `forceMount`): its trap is still active inside the click handler and pulls a `focus()` call back, so let Radix return focus at unmount and redirect it through `onCloseAutoFocus` when the trigger is gone. A surface whose trap your own code owns: release the trap and move focus in the close handler, before the exit starts. When the trigger is gone, send focus to the next row, the list heading or the region that changed. On open, move focus into the dialog on mount rather than in `onAnimationComplete`. `motion-patterns.md` has the CSS and the code. React Router moves no focus on navigation; see the route entries below and the `accessibility` skill for the full dialog and route-change contract.
 
 ### Route transitions with React Router
 
@@ -42,7 +42,7 @@ Each entry: what it looks like in a diff, why it breaks, what to do instead. Lon
 
 **Focus logic in the layout instead of the page.** A `useEffect` on `location` in the animated layout runs as soon as the URL changes. Under `mode="wait"` the new page has not mounted yet, so it focuses the leaving page's heading (which is `inert` if you followed the presence rules) or nothing, and focus ends on `<body>`. Move focus from the new page's heading when it mounts, so the timing follows the animation automatically. `accessibility` has the component.
 
-**Router-dependent hooks inside the leaving page.** With the `useOutlet` pattern the exiting page stays mounted under the same router, so any `useLocation` or `useSearchParams` call inside it re-renders with the new location during the exit. Breadcrumbs or effects derived from the location flicker to the new values, and effects keyed on the location fire in a page that is leaving. A page that renders React 19's `<title>` keeps it in `<head>` until the exit ends, so two titles are present at once, which React documents as undefined browser behavior. Render the title outside the animated subtree, for example in the layout from the deepest match's `handle` in data mode. Keep location reads in the page shallow, never start requests from a location effect in a page that may be exiting (check `useIsPresent()`), and keep exits short.
+**Router-dependent hooks inside the leaving page.** With the `useOutlet` pattern the exiting page stays mounted under the same router, so any `useLocation` or `useSearchParams` call inside it re-renders with the new location during the exit. In data mode `useLoaderData`, `useRouteLoaderData`, `useActionData` and `useMatches` do the same, and the router drops loader data for routes that no longer match: the leaving page gets `undefined` and throws, or, for the same route with a new param, shows the next record while it fades. Pages that may exit read data through TanStack Query keyed from `useParams()` (which keeps the old match) and use the loader only to prime the cache. Breadcrumbs or effects derived from the location flicker to the new values, and effects keyed on the location fire in a page that is leaving. A page that renders React 19's `<title>` keeps it in `<head>` until the exit ends, so two titles are present at once, which React documents as undefined browser behavior. Render the title outside the animated subtree, for example in the layout from the deepest match's `handle` in data mode. Keep location reads in the page shallow, never start requests from a location effect in a page that may be exiting (check `useIsPresent()`), and keep exits short.
 
 ### Layout and geometry
 
@@ -82,7 +82,7 @@ A Vite SPA renders on the client only: `index.html` ships an empty root and `cre
 
 **Stagger on long lists.** `delayChildren: stagger(0.05)` over 200 rows makes the last row wait ten seconds, and the whole list replays on every refetch or filter change when keys or the parent remount. Clamp the delay (`Math.min(index, MAX_STAGGERED) * STEP`), stagger only what is on screen, and use `AnimatePresence initial={false}` so existing rows do not animate on first render.
 
-**Infinite animations draining battery.** `repeat: Infinity`, GSAP `repeat: -1` or CSS `infinite` on decorative blobs, gradients and shimmer that keep running offscreen and for users who asked for less motion. Run loops only while in view (`useInView`, or ScrollTrigger `toggleActions`) and not under reduced motion; prefer a finite number of repeats for attention cues.
+**Infinite animations draining battery.** `repeat: Infinity`, GSAP `repeat: -1` or CSS `infinite` on decorative blobs, gradients and shimmer that keep running offscreen and for users who asked for less motion. Run loops only while in view (`useInView`, or ScrollTrigger `toggleActions`) and not under reduced motion; prefer a finite number of repeats for attention cues. A loop that runs longer than five seconds next to other content also needs a visible pause control, or must stop on its own within five seconds (WCAG 2.2.2, level A). Decoration is not exempt, and the reduced-motion check does not count as a pause.
 
 **`will-change` left on.** `will-change: transform` in a stylesheet on every card, or a static inline style on a long list. The browser keeps those optimizations far longer than it otherwise would, which costs memory on exactly the devices that needed help, and `will-change: transform` also creates a containing block that breaks fixed descendants. MDN calls it a last resort. Apply it only to the few elements with a measured problem, and only while they animate.
 
@@ -100,7 +100,7 @@ A Vite SPA renders on the client only: `index.html` ships an empty root and `cre
 
 **Triggers created out of page order.** Components mount in React order, not scroll order, so a pin created after a trigger lower on the page shifts that trigger's positions. Create triggers top to bottom, or set `refreshPriority` or call `ScrollTrigger.sort()`.
 
-**Pinning on mobile.** Mobile toolbars show and hide as the user scrolls, which resizes the viewport and refreshes every trigger mid-scroll: visible jumps and pins that start in the wrong place. Set `ScrollTrigger.config({ ignoreMobileResize: true })`, size pinned sections with `svh` rather than `vh`, and test on a real iOS Safari device. `ScrollTrigger.normalizeScroll()` moves scrolling onto the JavaScript thread; GSAP marks it experimental, so it is a last resort.
+**Pinning on mobile.** Mobile toolbars show and hide as the user scrolls, which resizes the viewport and refreshes every trigger mid-scroll: visible jumps and pins that start in the wrong place. ScrollTrigger already ignores viewport-height changes under 25% on touch-only devices (`ignoreMobileResize` is on by default there, so its absence is not a finding). Size pinned sections with `svh` rather than `vh`, and test on a real iOS Safari device. `ScrollTrigger.normalizeScroll()` moves scrolling onto the JavaScript thread; GSAP marks it experimental, so it is a last resort.
 
 **Pins in flex or transformed containers.** If the pin's container is `display: flex`, `pinSpacing` defaults to `false` and the following content scrolls under the pinned section. A transformed ancestor breaks the `position: fixed` used while pinned. Fix the DOM; `pinReparent` moves the element to `<body>` while pinned, and GSAP warns that reparenting can be expensive and to use it only if you must.
 
@@ -108,18 +108,19 @@ A Vite SPA renders on the client only: `index.html` ships an empty root and `cre
 
 - **Which tool.** CSS transitions for hover, focus and pressed styles on a single element with no React state. Motion for state-driven UI: presence, layout, gestures, scroll-linked values. GSAP for long timelines scrubbed by scroll, pinning, and its plugins. Never let two libraries or two mechanisms own the same property on the same element.
 - **Spring or tween.** A spring for anything interruptible or retargeted (sheets, drag release, layout, toggles the user can flip mid-motion). A tween with a fixed duration where arrival time matters (fades, tooltips, pressed feedback). No overshoot on destructive or spatially precise destinations.
-- **Duration.** Most UI animation sits between 100 and 500 ms, longer for longer travel; the more often the user sees it, the shorter and subtler it gets. Put the scale in `MotionConfig` or a shared transitions module, not per component.
+- **Duration.** Most UI animation sits between 100 and 400 ms, with 400 kept for large travel; at 500 it feels slow. The more often the user sees it, the shorter and subtler it gets. Put the scale in `MotionConfig` or a shared transitions module, not per component.
 - **`layout` or explicit values.** `layout` when a React commit changes geometry you did not want to compute (reorder, expand, responsive reflow). Explicit `animate` values for a known transform. Never both on the same box.
 - **Presence mode.** `sync` by default, `popLayout` when siblings should reflow at once, `wait` only for a single short slot.
 - **Reduced motion.** `MotionConfig reducedMotion="user"` at the root as the baseline. `useReducedMotion` wherever the reduced design differs: parallax, scroll-linked values, loops, large travel, video. `gsap.matchMedia()` with `(prefers-reduced-motion: no-preference)` around every GSAP scene, with a CSS layout that works without the scene.
 - **Bundle.** `m` plus `LazyMotion` when Motion is on a first-load route that does not need layout or drag; load `domMax` asynchronously for the routes that do.
+- **View transition or Motion for pages.** In data mode, a page crossfade or a shared element between pages is a view transition: `<Link viewTransition>` or `navigate(to, { viewTransition: true })`. The old page is a browser snapshot, so none of the dual-mount problems above apply. Add the `prefers-reduced-motion` rule for the `::view-transition-*` pseudo-elements (the browser does not apply it), keep it short because the page takes no pointer input while it runs, and keep the heading focus move. React 19.3's `<ViewTransition>` (or Motion's `AnimateView` on top of it) is for in-page transitions; never let it and the router both start a transition for the same navigation. Use the Motion `useOutlet` pattern only in declarative mode or for per-element exit choreography.
 - **Route transitions.** Enter-only by default: an opacity fade keyed on `pathname`, skipped on the app's first render. Add an exit only when the design needs one, and then with a captured `useOutlet()` element or `<Routes location={location}>`, a short opacity-only exit, focus moved from the new page's heading on mount, and Back tested on a long page.
 
 ## Review checklist
 
 - Is every `AnimatePresence` always mounted, with the condition inside it and stable id keys on every direct child?
 - Does every mutation and navigation happen in the event handler, independent of any animation callback?
-- Is exiting content `inert`, and does focus move somewhere deliberate when a dialog closes or a route changes?
+- Is exiting content `inert`, does focus move somewhere deliberate when a dialog closes or a route changes, and is every native `<dialog>` kept mounted and animated in CSS rather than inside `AnimatePresence`?
 - Does any element have both `layout` and a geometric `animate`, or animate `width`, `height`, `top` or `left` on more than one element?
 - Are `border-radius` and `box-shadow` on layout-animated elements set through `style`, and do scroll containers have `layoutScroll`?
 - Are repeated components that use `layoutId` wrapped in `LayoutGroup` with a unique id?
@@ -130,17 +131,18 @@ A Vite SPA renders on the client only: `index.html` ships an empty root and `cre
 - Does the lockfile resolve exactly one `framer-motion` version, with every import coming from one path (`framer-motion` or `motion/react`)?
 - Does every route transition with an exit render a captured `useOutlet()` element or `<Routes location={location}>` instead of a bare `<Outlet />`, and is every route wrapper keyed so query-string changes do not replay it?
 - After a route transition, does focus land on the new page's heading, and does Back return to the saved scroll offset?
+- Do view transitions have a `prefers-reduced-motion` rule on the `::view-transition-*` pseudo-elements, and does each navigation have a single owner (the router or React's `<ViewTransition>`)?
 - Does every parallax, scroll-linked value, loop, GSAP scene and autoplay have a reduced-motion alternative?
 - Can the user click, type and navigate while any animation is running?
-- Are staggers clamped, loops stopped offscreen and `will-change` absent from stylesheets?
+- Are staggers clamped, loops stopped offscreen, every loop longer than five seconds paired with a pause control, and `will-change` absent from stylesheets?
 - Is every GSAP tween and ScrollTrigger created inside `useGSAP` or `contextSafe`, with the pinned element itself left unanimated?
 - Are triggers created in page order and refreshed after late content, and has the pinned section been scrolled on a real phone?
 
 ## References
 
-- [motion-patterns.md](references/motion-patterns.md): read when writing presence, dialogs, lists, layout animation, scroll-linked effects, first-load entrances or React Router route transitions with Motion.
+- [motion-patterns.md](references/motion-patterns.md): read when writing presence, dialogs, lists, layout animation, scroll-linked effects, first-load entrances, view transitions or React Router route transitions.
 - [gsap-react.md](references/gsap-react.md): read before writing or reviewing any GSAP or ScrollTrigger code in React.
 - [timing-and-principles.md](references/timing-and-principles.md): read when choosing durations, easing and springs, or judging whether a motion earns its place.
 - [audit.md](references/audit.md): read when asked to audit or debug animation across a codebase; search patterns and the manual test matrix.
 
-Related skills: `accessibility` for dialog and focus contracts, `frontend-engineering` for routing, data fetching and bundle work outside animation, `performance-benchmarking` for measuring frame and INP regressions.
+Related skills: `accessibility` for dialog and focus contracts, `frontend-engineering` for routing, data fetching and bundle work outside animation, `performance-benchmarking` (its browser reference) for measuring frame and INP regressions.

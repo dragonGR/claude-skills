@@ -91,7 +91,7 @@ UPDATE jobs SET state = 'dead', last_error = 'lease expired on final attempt'
 
 ## Fenced writes
 
-Business writes made by a job check the fence in the same transaction. Locking the job row also makes a concurrent takeover wait until this transaction ends.
+Business writes made by a job check the fence in the same transaction. Locking the job row also keeps a concurrent takeover from claiming it until this transaction ends, because the claim skips locked rows.
 
 ```ts
 export class LeaseLostError extends Error {}
@@ -150,7 +150,8 @@ export async function runWorker(
 
     try {
       await handler(claimed, { leaseLost: leaseLost.signal, shuttingDown });
-      await pool.query(COMPLETE_JOB, [claimed.id, claimed.lease_token]);
+      const done = await pool.query(COMPLETE_JOB, [claimed.id, claimed.lease_token]);
+      if (done.rowCount === 0) log.warn({ jobId: claimed.id }, 'job finished after its lease was taken over');
     } catch (err) {
       const delaySeconds = Math.random() * Math.min(cfg.maxBackoffSeconds, cfg.baseBackoffSeconds * 2 ** (claimed.attempts - 1));
       await pool
@@ -163,7 +164,7 @@ export async function runWorker(
 }
 ```
 
-`idle` is the abortable sleep from outbox-and-consumers.md. Keep `heartbeatMs` a small fraction of the lease so one missed renewal does not lose it. The handler checks `leaseLost` and `shuttingDown` between steps and stops early; anything it has already done must be safe to repeat, because the next claimant starts from the top. On SIGTERM the loop stops claiming and the current job either finishes inside the grace period or is abandoned, in which case its lease expires and another worker takes it.
+`idle` is the abortable sleep from outbox-and-consumers.md. Keep `heartbeatMs` a small fraction of the lease so one missed renewal does not lose it. Zero rows from `COMPLETE_JOB` means another worker took the job over while the handler ran; the idempotent handler makes that harmless, but a steady rate of those warnings says the lease is too short or the heartbeat is failing. The handler checks `leaseLost` and `shuttingDown` between steps and stops early; anything it has already done must be safe to repeat, because the next claimant starts from the top. On SIGTERM the loop stops claiming and the current job either finishes inside the grace period or is abandoned, in which case its lease expires and another worker takes it.
 
 ## Schedules without leader election
 
@@ -228,7 +229,7 @@ export async function transitionPayout(
 }
 ```
 
-The check and the write are one statement, so two workers cannot both move a payout out of `pending`. Whatever the transition triggers (the transfer, the email, the outbox event) runs only for the caller that got `applied`, or is itself idempotent. `already` is how a retried job recognises that an earlier attempt finished. Write an audit row and any outbox event in the same transaction as the transition.
+The check and the write are one statement, so two workers cannot both move a payout out of `pending`. Whatever the transition triggers (the transfer, the email, the outbox event) runs only for the caller that got `applied`, or is itself idempotent. `already` is how a retried job recognizes that an earlier attempt finished. Write an audit row and any outbox event in the same transaction as the transition.
 
 A CHECK constraint on the column catches invalid state names, not invalid transitions. When several code paths write the column (which is itself worth fixing), a trigger that rejects transitions not in the table is a reasonable backstop.
 

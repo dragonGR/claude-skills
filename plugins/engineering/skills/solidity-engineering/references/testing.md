@@ -183,13 +183,15 @@ Run Slither on every change and triage each finding: real, false positive with a
 
 ## Hardhat equivalents
 
-| Foundry | Hardhat |
-| --- | --- |
-| `vm.prank`, `vm.startPrank` | connect a signer, or impersonate with `hardhat_impersonateAccount` |
-| `vm.warp`, `vm.roll` | `time.increase`, `time.increaseTo`, `mine` from `@nomicfoundation/hardhat-network-helpers` |
-| `vm.snapshotState`, `vm.revertToState` | `loadFixture` or `takeSnapshot` |
-| `deal` | `setBalance` for native POL; token balances need a funded holder or storage writes |
-| `vm.createSelectFork` | `forking` in the network config with a pinned `blockNumber` |
-| `vm.expectRevert(Error.selector)` | `revertedWithCustomError(contract, "Error")` from the chai matchers |
+Hardhat 3 runs Foundry-style Solidity tests, including fuzz and invariant tests (`invariant.runs`, `invariant.depth`, `invariant.failOnRevert` in inline configuration), so the handler pattern above works there as well. For TypeScript tests in Hardhat 3, the helpers hang off a network connection: `const { networkHelpers, viem } = await network.create()` (`network.connect()` is deprecated since Hardhat 3.4).
 
-Hardhat has no built-in invariant testing. For contracts that hold value, add a Foundry suite next to the Hardhat one rather than going without.
+| Foundry | Hardhat 3 (TypeScript tests) |
+| --- | --- |
+| `vm.prank`, `vm.startPrank` | `networkHelpers.impersonateAccount`, or pass `{ account }` to the viem write |
+| `vm.warp`, `vm.roll` | `networkHelpers.time.increase`, `time.increaseTo`, `mine` |
+| `vm.snapshotState`, `vm.revertToState` | `networkHelpers.loadFixture` or `takeSnapshot` |
+| `deal` | `networkHelpers.setBalance` for native POL; token balances need a funded holder or `setStorageAt` |
+| `vm.createSelectFork` | `forking` with a pinned `blockNumber` on an `edr-simulated` network in the config |
+| `vm.expectRevert(Error.selector)` | `viem.assertions.revertWithCustomError(call, contract, "Error")`, or `revertedWithCustomError` from the ethers chai matchers |
+
+Hardhat 2 imports the same helpers directly from `@nomicfoundation/hardhat-network-helpers` and has no Solidity, fuzz or invariant tests; on a Hardhat 2 project that holds value, add a Foundry suite next to the TypeScript tests rather than going without.

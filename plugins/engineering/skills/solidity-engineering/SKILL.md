@@ -1,6 +1,6 @@
 ---
 name: solidity-engineering
-description: Writing, testing and deploying Solidity contracts on Polygon PoS with Foundry, covering access control, value accounting, reentrancy, signatures and Keccak hashing, upgrades, oracles, gas and unbounded loops, fuzz, invariant and fork tests, deploy scripts, verification and finality. Load it before writing, reviewing, testing or deploying any contract or any script that talks to one.
+description: Solidity contracts with Foundry on Polygon PoS and other EVM chains: access control, token accounting, reentrancy, EIP-712 signatures, Keccak hashing, upgrades, oracles, gas and loops, fuzz, invariant and fork tests, deploy scripts, verification and finality. Load it before writing, reviewing, testing or deploying a contract or a script that calls one.
 license: MIT
 metadata:
   author: Alex Tsanis
@@ -19,9 +19,9 @@ Before changing anything, read `foundry.toml`, the pinned compiler, the OpenZepp
 | Chain ids: 137 mainnet, 80002 Amoy | Bind every signature to the chain id; read RPC URLs and chain ids from configuration, never from code |
 | Gas token is POL | Contracts and scripts that mention MATIC need review; native value is POL |
 | Minimum priority fee of 25 gwei on mainnet | Transactions with a lower tip do not get mined; take fees from the Polygon Gas Station or `eth_feeHistory`, with a ceiling from configuration |
-| Blocks roughly every 2 seconds | `block.number` is not a clock; use `block.timestamp` for time, and never for randomness |
+| Block time is set by governance: about 2 s until May 2026, then 1.75 s, and 1.5 s by July 2026 (PIP-86) | `block.number` is not a clock, and every block-count-to-time conversion broke at each change; use `block.timestamp` for time, and never for randomness |
 | Deterministic finality in about 2 to 5 seconds through Heimdall v2 milestones, queried with the `"finalized"` block tag | Credit deposits, mark payouts done and react to events only from finalized blocks; anything newer can still be reorganized |
-| EVM up to Prague; no Osaka | Set `evm_version = "prague"` in `foundry.toml`. Solidity 0.8.31 and later default to `osaka`, whose `clz` opcode does not exist on Polygon |
+| Hardforks follow Polygon's own schedule, not Ethereum's: Pectra's EIP-7702 arrived with Bhilai (July 2025), Osaka's only new opcode, `clz`, with Lisovo (March 2026) | Set `evm_version` explicitly in `foundry.toml` to the newest fork the chain has activated (`osaka` covers Polygon and Amoy today). Solidity 0.8.31+ and Foundry 1.8 default to `osaka`, and a future compiler default can emit opcodes Polygon does not run yet; check Polygon's hardfork announcements before raising the target |
 | No L2 sequencer | Chainlink's sequencer uptime check applies to rollups, not to Polygon PoS; staleness checks still apply |
 | Verification through the Etherscan API v2 with one key for all chains | `forge verify-contract --chain 137` (or `--chain 80002` for Amoy) with `ETHERSCAN_API_KEY` |
 
@@ -34,6 +34,8 @@ Before changing anything, read `foundry.toml`, the pinned compiler, the OpenZepp
 **One key that can do everything.** The deployer or an operations hot wallet holds the role that can upgrade, mint, pause, change the oracle and move funds. One leaked key drains the contract. Split roles by power: fund movement, upgrades and role administration behind a multisig and a `TimelockController` or `AccessManager` delay; hot keys limited to bounded, rate-limited actions with fixed destinations. Use two-step transfers for admin roles (`Ownable2Step`, `AccessControlDefaultAdminRules`).
 
 **`tx.origin` for authorization.** Any contract the owner interacts with can act as the owner. Use `msg.sender`.
+
+**Treating an address with no code as unable to run code.** Under EIP-7702 (live on Polygon since Bhilai) an EOA can delegate to contract code and still sign transactions. `require(msg.sender == tx.origin)` therefore no longer keeps out reentrancy, flash-loan callbacks or batched calls; `code.length == 0` never did, because a contract has no code while its constructor runs; and `code.length > 0` does not prove an ordinary contract either: a delegated EOA has 23 bytes of code (`0xef0100` followed by the delegate's address). Protect with `nonReentrant` and explicit authorization, not with EOA checks.
 
 **Pausing that cannot stop the damage.** A pause flag that does not cover every value-moving path, or a pauser that is the same key as the attacker's target. Decide what pausing stops, test it, and make sure unpausing needs more authority than pausing.
 
@@ -51,7 +53,7 @@ Before changing anything, read `foundry.toml`, the pinned compiler, the OpenZepp
 
 ### External calls and reentrancy
 
-**State updated after the call.** A token hook (ERC-777, ERC-721 and ERC-1155 receivers), a native transfer to a contract or a callback re-enters before balances change. Follow checks, effects, then interactions, and add `nonReentrant` to every function that shares the state, not only the one you were looking at. OpenZeppelin's `ReentrancyGuardTransient` uses transient storage, which Polygon supports.
+**State updated after the call.** A token hook (ERC-777, ERC-721 and ERC-1155 receivers), a native transfer to a contract or a callback re-enters before balances change. Follow checks, effects, then interactions, and add `nonReentrant` to every function that shares the state, not only the one you were looking at. OpenZeppelin's `ReentrancyGuardTransient` uses transient storage, which Polygon supports. From OpenZeppelin 5.5, upgradeable contracts import `ReentrancyGuard` and `ReentrancyGuardTransient` from `@openzeppelin/contracts`: they are stateless, so `ReentrancyGuardUpgradeable` no longer exists.
 
 **Read-only reentrancy.** Another protocol reads your view function (a price, a share rate) while your state is half updated in the middle of a call. Do not expose prices from state that is inconsistent during a call, or guard the views.
 
@@ -73,7 +75,7 @@ Before changing anything, read `foundry.toml`, the pinned compiler, the OpenZepp
 
 ### Upgrades and storage
 
-**Initializer left open.** An implementation without `_disableInitializers()` in its constructor, or a proxy deployed in one transaction and initialized in the next, lets anyone front-run the initializer and take admin. Pass the init call data to the proxy constructor in the same transaction, and lock implementations. OpenZeppelin 5.6 and later make `ERC1967Proxy` revert on empty init data; older versions and hand-written proxies do not.
+**Initializer left open.** An implementation without `_disableInitializers()` in its constructor, or a proxy deployed in one transaction and initialized in the next, lets anyone front-run the initializer and take admin. Pass the init call data to the proxy constructor in the same transaction, and lock implementations. OpenZeppelin 5.6 and later make `ERC1967Proxy` and `TransparentUpgradeableProxy` revert with `ERC1967ProxyUninitialized` on empty init data; older versions and hand-written proxies do not.
 
 **Upgrade authority without control.** UUPS `_authorizeUpgrade` without an access check lets anyone replace the logic. Gate it with the highest authority you have, behind a delay.
 
@@ -107,7 +109,9 @@ Solidity has no memory leaks in the usual sense: memory is cleared after every e
 
 **Floating pragma for deployed contracts.** `pragma solidity ^0.8.20` lets a different compiler build what you deploy than what you tested. Pin an exact version for contracts you deploy.
 
-**Compiler target the chain does not support.** With no `evm_version` set, recent compilers target `osaka`. Set `evm_version = "prague"` for Polygon so tests, deployment and verification all use what the chain runs.
+**Compiler version with a known bug.** Some compiler releases miscompile code under specific settings, and nothing warns at build time. Solidity 0.8.28 to 0.8.33 with `via_ir` and a Cancun-or-later target clear only one of two locations when a contract `delete`s a transient variable and also clears persistent storage (TransientStorageClearingHelperCollision, fixed in 0.8.34). Before pinning or deploying, look up the version in the compiler's `docs/bugs_by_version.json` and check each listed bug's conditions against your settings.
+
+**Compiler target the chain does not support.** With no `evm_version` set, the compiler picks its own default, which tracks Ethereum mainnet. Set it to the newest fork the target chain has activated so tests, deployment and verification all use what the chain runs.
 
 **Settings that differ between test, deploy and verification.** `via_ir`, optimizer runs and EVM version change the bytecode. Keep them in `foundry.toml`, deploy from a clean build of the tagged commit, and verify with the same settings, or verification fails and the deployed code is not the code you reviewed.
 
@@ -156,7 +160,8 @@ Polygon gas settings, script flags, verification, key handling and the post-depl
 - Are implementations locked, proxies initialized in the deploy transaction, and storage layouts diffed in CI?
 - Are oracle answers checked for staleness and sign, from configured limits?
 - Is every loop bounded independently of the number of users, and is every growing list paginated?
-- Is the compiler pinned, `evm_version` set to `prague`, and are build settings identical for test, deploy and verification?
+- Is the compiler pinned to a version with no known bugs for these settings (`bugs_by_version.json`), `evm_version` set explicitly to a fork the chain has activated, and are build settings identical for test, deploy and verification?
+- Does any guard rely on `tx.origin == msg.sender` or `code.length` to mean "EOA" or "contract"?
 - Do unit, fuzz, invariant and (where relevant) fork tests cover every value-moving path, and does removing any guard fail a test?
 - Was the deploy script run on a fork and on Amoy, and does a post-deploy check confirm every role and parameter on chain?
 

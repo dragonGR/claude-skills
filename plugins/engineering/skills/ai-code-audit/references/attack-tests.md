@@ -21,7 +21,7 @@ Do this for every test that claims to cover a fix or a guard. Use worktrees, so 
 **For a bug fix:** run the new test against the base.
 
 ```sh
-base=$(git merge-base HEAD origin/main)
+base=$(git merge-base HEAD "$(git rev-parse --abbrev-ref origin/HEAD)")
 git worktree add /tmp/audit-base "$base"
 cp path/to/new.test.ts /tmp/audit-base/path/to/new.test.ts
 (cd /tmp/audit-base && npm ci && npx vitest run path/to/new.test.ts)
@@ -34,9 +34,10 @@ It must fail, and fail on the assertion that describes the bug. A failure from a
 
 ```sh
 git worktree add /tmp/audit-head HEAD
+git diff --binary HEAD | git -C /tmp/audit-head apply
 ```
 
-In `/tmp/audit-head`, delete or invert the guard the test claims to cover (the ownership condition, the nonce check, the limit, the `nonReentrant`), run the test and confirm it fails. Repeat for each guard. Then remove the worktree. A test that stays green with its guard gone is not a test of that guard; report it and write one that is.
+A worktree at `HEAD` lacks uncommitted work, so the second line carries staged and unstaged changes across; copy untracked files (`git ls-files --others --exclude-standard`) by hand. Without this, the guard you delete is one the worktree never had. In `/tmp/audit-head`, delete or invert the guard the test claims to cover (the ownership condition, the nonce check, the limit, the `nonReentrant`), run the test and confirm it fails. Repeat for each guard. Then remove the worktree. A test that stays green with its guard gone is not a test of that guard; report it and write one that is.
 
 Mutation testing tools automate this across a module. Setup and reading results are in the test-engineering skill.
 
@@ -44,41 +45,7 @@ Mutation testing tools automate this across a module. Setup and reading results 
 
 An attack test plays the hostile caller and then checks two things: the attack was refused, and nothing changed.
 
-### Another tenant's object
-
-```ts
-it("refuses another organization's invoice", async () => {
-  const invoice = await createInvoice({ orgId: orgB.id, total: INVOICE_TOTAL });
-
-  const res = await request(app)
-    .get(`/orgs/${orgA.id}/invoices/${invoice.id}`)
-    .set(authHeadersFor(memberOfOrgA));
-
-  expect(res.status).toBe(404);
-  expect(res.body).not.toHaveProperty("total");
-});
-```
-
-The caller is authenticated and a real member of an organization, so a 404 here can only come from the ownership check, not from missing credentials.
-
-### Two requests racing for one resource
-
-```ts
-it("redeems a single-use coupon once under concurrent requests", async () => {
-  const coupon = await createCoupon({ maxUses: 1 });
-
-  const results = await Promise.all(
-    users.slice(0, CONCURRENT_ATTEMPTS).map((user) =>
-      request(app).post(`/coupons/${coupon.code}/redeem`).set(authHeadersFor(user)),
-    ),
-  );
-
-  expect(results.filter((r) => r.status === 200)).toHaveLength(1);
-  expect(await countRedemptions(coupon.code)).toBe(1);
-});
-```
-
-This only means something against the real database engine with real connections. A mocked repository or an in-memory store serializes the calls and the race never happens.
+Cross-tenant and race tests, with positive controls and a connection pool that lets the requests actually overlap, are in the test-engineering skill (`references/authz-matrix.md` and `references/concurrency-and-idempotency.md`). Two short examples follow, for a lost provider response and for a replayed contract signature.
 
 ### Retry after an unknown outcome
 

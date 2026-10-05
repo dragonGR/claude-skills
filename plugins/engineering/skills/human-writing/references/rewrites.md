@@ -39,7 +39,7 @@ Rewrite:
 >
 > Verified: `npm test`, including new tests for a redelivered event and for two concurrent deliveries of the same event. On staging, resending 20 already-processed events from the Stripe Dashboard produced no new ledger rows.
 >
-> Risk: the migration adds a unique index on `webhook_events(event_id)`. The table has 40k rows; the index is built with `CREATE UNIQUE INDEX CONCURRENTLY` in its own migration, because PostgreSQL does not allow that statement inside a transaction.
+> Risk: the migration adds a unique index on `webhook_events(event_id)`. The table has 40k rows; the index is built with `CREATE UNIQUE INDEX CONCURRENTLY` in its own migration, because PostgreSQL does not allow that statement inside a transaction. A query on production found no duplicate `event_id`s in the existing rows. If the build fails anyway, it leaves an invalid index that has to be dropped before the migration is retried.
 
 What changed. The template headings and bold-label bullets split one bug into three "changes". The rewrite says what was wrong, how it showed up, what the fix does and why it prevents duplicates. "Optimized database queries" had nothing in the diff behind it and was dropped. The verification line lists what was actually run, and the risk line gives the reviewer the one thing to check in the migration.
 

@@ -1,6 +1,6 @@
 ---
 name: git-workflows
-description: Safe, expert Git for real repositories covering recovery with reflog, interactive rebase and fixups, cherry-pick, reverting merges, conflicts and rerere, bisect, worktrees, force pushes with lease, leaked secrets in history, line endings, LFS and submodules. Load it before any history rewrite, destructive command, recovery or tricky merge, and when lost work needs finding.
+description: Safe Git for real repositories: reflog recovery, interactive rebase and fixups, cherry-pick, reverting merges, conflicts and rerere, bisect, worktrees, force pushes with lease, secrets in history, line endings, LFS and submodules. Load it before any history rewrite, destructive command, recovery or tricky merge, or when work seems lost.
 license: MIT
 metadata:
   author: Alex Tsanis
@@ -17,7 +17,7 @@ Check the version first (`git --version`); a few options below need a recent Git
 These rules hold for every Git operation an AI agent performs.
 
 1. **Look first.** Before any change, read `git status`, `git stash list`, the current branch and its upstream (`git status -sb`), and recent history (`git log --oneline --graph -n 20`). Uncommitted or untracked work you did not create belongs to the user.
-2. **Ask before anything that discards, rewrites or publishes.** That includes `reset --hard`, `clean -f`, `checkout -- <path>` or `restore` over changes, `stash drop` and `stash clear`, `branch -D`, `rebase`, `commit --amend` on pushed commits, `filter-repo`, any force push, `push` of any kind and `commit` when the user did not ask for one. State the exact command and what it will change, then wait for approval.
+2. **Ask before anything that discards, rewrites or publishes.** That includes `reset --hard`, `clean -f`, `checkout -- <path>` or `restore` over changes, `stash` in any form (push, pop, drop, clear), `branch -D`, `rebase`, `commit --amend` on pushed commits, `filter-repo`, any force push, `push` of any kind and `commit` when the user did not ask for one. State the exact command and what it will change, then wait for approval.
 3. **Back up before rewriting.** Create a ref that points at the current state before a rebase, reset, amend or history rewrite: `git branch backup/<what>-<timestamp>`. The reflog also records this, but a named ref survives garbage collection and is easy to find.
 4. **Dry-run what can be dry-run.** `git clean -n` before `-f`, `git push --dry-run` before a real push, `git rebase` on a backup branch before the real one when the outcome is uncertain.
 5. **Never rewrite shared history without agreement.** Commits on `main`, release branches or any branch someone else has pulled stay as they are. Fix forward with new commits or `git revert`.

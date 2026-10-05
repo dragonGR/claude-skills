@@ -33,7 +33,7 @@ Raw-query escape hatches to grep for: `sql.unsafe`, `$queryRawUnsafe`, `$execute
 const user = await db.collection('users').findOne({ email: req.body.email, password: req.body.password });
 
 // After: types enforced, and the password is never a query predicate.
-const { email, password } = z.object({ email: z.string().email(), password: z.string().max(PASSWORD_MAX) }).parse(req.body);
+const { email, password } = z.object({ email: z.email(), password: z.string().max(PASSWORD_MAX) }).parse(req.body);
 const user = await db.collection('users').findOne({ email });
 const ok = await argon2.verify(user?.passwordHash ?? config.auth.dummyHash, password);
 ```
@@ -47,17 +47,14 @@ Also reject keys starting with `$` or containing `.` in any user object stored a
 exec(`git clone --depth 1 ${repoUrl} ${workDir}`);
 
 // After
-const RepoUrl = z
-  .string()
-  .url()
-  .refine((value) => new URL(value).protocol === 'https:', 'https only');
+const RepoUrl = z.url({ protocol: /^https$/ });
 
 execFile('git', ['clone', '--depth', '1', '--', RepoUrl.parse(repoUrl), workDir], {
   timeout: config.imports.cloneTimeoutMs,
 });
 ```
 
-`workDir` is a server-generated path. The scheme check also blocks git's `ext::` and `file://` transports. `--` stops a value starting with `-` being read as an option for tools that honour it; for tools that do not (check the tool's own docs), validate that the value cannot start with `-`. In Python: `subprocess.run([...], shell=False, timeout=...)`, never `shell=True` with user data, and `shlex.quote` is not a substitute for argv.
+`workDir` is a server-generated path. The scheme check also blocks git's `ext::` and `file://` transports. `--` stops a value starting with `-` being read as an option for tools that honor it; for tools that do not (check the tool's own docs), validate that the value cannot start with `-`. In Python: `subprocess.run([...], shell=False, timeout=...)`, never `shell=True` with user data, and `shlex.quote` is not a substitute for argv.
 
 ## Paths
 
@@ -89,12 +86,12 @@ Prefix checks without the separator accept `/data/uploads-evil` for base `/data/
 
 For each entry before writing anything:
 
-1. Reject absolute names, names containing `..` segments after normalisation, and names whose resolved target fails `resolveInside(dest, name)`.
+1. Reject absolute names, names containing `..` segments after normalization, and names whose resolved target fails `resolveInside(dest, name)`.
 2. Reject symlink and hardlink entries unless the feature needs them; if it does, resolve the link target with the same check.
 3. Keep running totals of entry count and uncompressed bytes while streaming, and abort when either passes a configured cap. The sizes in the archive header are attacker-supplied; count bytes actually written.
 4. Extract into a fresh temporary directory owned by the job, then move the validated result.
 
-Python: `zipfile` strips `..` and absolute prefixes but has no size limit; `tarfile.extractall(path, filter='data')` refuses links outside the destination, absolute paths and device files. Pass the filter explicitly, since it only became the default in 3.14.
+Python: `zipfile` strips `..` and absolute prefixes but has no size limit; `tarfile.extractall(path, filter='data')` refuses links outside the destination, absolute paths and device files. Pass the filter explicitly, since it only became the default in 3.14. The filter has had repeated bypasses that write outside the destination: CVE-2025-4517 and related CVEs were fixed in 3.11.13, 3.12.11, 3.13.4 and 3.14.0, and more link and hardlink bypasses (CVE-2026-7774, CVE-2026-11940 and others) in patch releases through 2026. Run the newest patch release and extract into a fresh `tempfile.mkdtemp()` directory; python-engineering's boundaries reference has the full extraction code.
 
 ## SSRF
 
@@ -111,9 +108,11 @@ const BLOCKED_V4: Array<[string, number]> = [
   ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15],
   ['224.0.0.0', 4], ['240.0.0.0', 4],
 ];
-// IPv4-mapped, NAT64 and 6to4 ranges embed IPv4 addresses, so they are blocked outright.
+// IPv4-compatible, NAT64 and 6to4 ranges embed IPv4 addresses, so they are blocked outright.
+// BlockList checks IPv4-mapped addresses (::ffff:a.b.c.d) against the IPv4 rules, so they need no
+// entry here; a '::ffff:0:0/96' rule would match every IPv4 address. '::/96' also covers '::' and '::1'.
 const BLOCKED_V6: Array<[string, number]> = [
-  ['::', 128], ['::1', 128], ['::ffff:0:0', 96], ['64:ff9b::', 96], ['64:ff9b:1::', 48], ['2002::', 16],
+  ['::', 96], ['64:ff9b::', 96], ['64:ff9b:1::', 48], ['2002::', 16],
   ['fc00::', 7], ['fe80::', 10], ['ff00::', 8],
 ];
 
@@ -171,7 +170,7 @@ export function fetchPublicUrl(rawUrl: string, limits: { timeoutMs: number; maxB
 Notes on the template:
 
 - `http.get` does not follow redirects. If the feature needs them, follow manually up to a configured count, running each `Location` back through `fetchPublicUrl`.
-- The WHATWG `URL` parser normalises `http://2130706433/` and `http://0x7f.1/` to `127.0.0.1`, so the literal check sees the real address.
+- The WHATWG `URL` parser normalizes `http://2130706433/` and `http://0x7f.1/` to `127.0.0.1`, so the literal check sees the real address.
 - With `autoSelectFamily` on (the Node default in current releases), the lookup is called with `all: true` and returns an array; the wrapper handles both shapes.
 - Using `fetch` (undici) with an `Agent` whose connect options carry the same lookup is possible, but verify against the installed undici version before relying on it.
 - Adjust the blocklist to your network: if services run on public IPs of your own, block those too. Keep network-level egress rules as well; the in-process check is one layer.
@@ -181,12 +180,20 @@ Python: resolve with `socket.getaddrinfo`, classify each address, and make the H
 ```python
 import ipaddress
 
+# is_global is True for NAT64 and IPv4-compatible addresses, which can carry a private IPv4.
+EMBEDS_IPV4 = [ipaddress.ip_network(n) for n in ("::/96", "64:ff9b::/96", "64:ff9b:1::/48", "2002::/16")]
+
 def is_public(address: str) -> bool:
     ip = ipaddress.ip_address(address)
-    if ip.version == 6 and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
+    if ip.version == 6:
+        if ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
+        elif any(ip in net for net in EMBEDS_IPV4):
+            return False
     return ip.is_global and not ip.is_multicast
 ```
+
+On an IPv6-only network with DNS64, a hostname whose A record is `10.0.0.5` resolves to `64:ff9b::a00:5`, and the NAT64 gateway forwards the connection to the private address, so the embedding ranges are refused outright, matching the TypeScript blocklist.
 
 `requests` and `httpx` resolve the hostname again when connecting, so a pre-check with `socket.gethostbyname` followed by `httpx.get(url)` is rebinding-prone, and `gethostbyname` ignores IPv6 entirely. For arbitrary user URLs in Python, route through an egress proxy that enforces the policy on the connected address (Smokescreen is one), and set `follow_redirects=False`.
 
@@ -206,7 +213,7 @@ export function safeReturnPath(raw: unknown, fallback: string): string {
 }
 ```
 
-Resolving against your origin and comparing origins handles `//evil.example`, `/\evil.example` and tab or newline tricks, because the URL parser applies the same normalisation the browser will. For cross-domain returns (a partner site), store allowed destinations server-side and pass an id.
+Resolving against your origin and comparing origins handles `//evil.example`, `/\evil.example` and tab or newline tricks, because the URL parser applies the same normalization the browser will. For cross-domain returns (a partner site), store allowed destinations server-side and pass an id.
 
 ## Deserialization and parsers
 

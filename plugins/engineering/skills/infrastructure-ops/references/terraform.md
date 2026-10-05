@@ -22,6 +22,8 @@ The state bucket needs versioning (to recover from a bad write or deletion), enc
 
 The 1.11 floor covers `use_lockfile` and write-only arguments; set it to the oldest version you have actually tested.
 
+OpenTofu has different floors: `use_lockfile` from 1.10, ephemeral resources and write-only attributes from 1.11. It also has native state encryption (1.7 and later, an `encryption` block inside `terraform {}` with a key provider such as AWS KMS), which encrypts state and plan files on the client before they reach the backend and is the strongest answer to the secrets-in-state problem below. Check which binary the repository runs (`.terraform-version`, `.opentofu-version`, CI setup steps) before applying either set of version rules.
+
 ## Keeping secrets out of state
 
 `sensitive = true` hides a value from CLI output only; state and plan files still contain it. In order of preference:
@@ -49,6 +51,17 @@ moved {
 ```
 
 Plan after adding the blocks: the resources must show as moved with no destroy. In a module other configurations consume, keep `moved` blocks permanently, because a caller still on the old address would otherwise plan a delete. Chain moves (`a` to `b`, then `b` to `c`) rather than rewriting old blocks. A `moved` block cannot turn a managed resource into a data source.
+
+To bring a resource created outside Terraform (in the console, during an incident) under management, declare an import instead of recreating it:
+
+```hcl
+import {
+  to = aws_s3_bucket.exports
+  id = "<bucket-name>"
+}
+```
+
+`terraform plan -generate-config-out=generated.tf` drafts the resource block. Review it, move it into the right file, and apply only when the plan shows the import with no changes. Import blocks need Terraform 1.5 or later.
 
 To stop managing something without deleting it (handing it to another stack or tool):
 

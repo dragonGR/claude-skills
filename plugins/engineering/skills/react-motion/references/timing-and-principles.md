@@ -10,7 +10,7 @@ Read each motion as a state transition: action, feedback, stable result. If the 
 
 ## Durations
 
-Nielsen Norman Group puts most UI animation between 100 and 500 ms: around 100 ms for simple feedback such as a toggle or checkbox, 200 to 300 ms for substantial changes such as a modal moving into view, 400 ms only for big movements, and at 500 ms it starts to feel like a drag. The more often a user sees an animation, the shorter and subtler it should be; the command palette someone opens fifty times a day gets the fastest transition in the product.
+Nielsen Norman Group puts most UI animation between 100 and 400 ms: around 100 ms for simple feedback such as a toggle or checkbox, 200 to 300 ms for substantial changes such as a modal moving into view, 400 ms only for big movements, and at 500 ms it starts to feel like a drag. The more often a user sees an animation, the shorter and subtler it should be; the command palette someone opens fifty times a day gets the fastest transition in the product.
 
 Build a small scale once and reference it everywhere:
 
@@ -36,23 +36,10 @@ Duration also scales with distance and size: a tooltip and a full-screen sheet s
 
 Ease-out for elements entering or responding to the user, ease-in for elements leaving, ease-in-out for elements moving from one on-screen place to another. Linear only for continuous, scroll-scrubbed or looping motion, where easing would read as speeding up and slowing down.
 
-## Principles as review lenses
-
-| Principle | Use in UI | Failure to catch |
-| --- | --- | --- |
-| Anticipation | A slight pre-motion before a drag or sheet | Delaying an action the user already committed |
-| Staging | One dominant motion points at what changed | Several surfaces moving at once, competing |
-| Pose to pose | Named states (`closed`, `open`, `closing`) and transitions between them | Imperative DOM mutation with no state model behind it |
-| Follow-through | Dependent details settle after the main change | Focus or interaction left behind on the leaving element |
-| Slow in, slow out | Easing that matches distance and interruptibility | Bounce on precise or destructive destinations |
-| Arc | Pointer-driven motion follows the user's path | Objects teleporting during a spatial interaction |
-| Secondary action | A small cue confirming the main action | A second animation that hides the result |
-| Timing | Short for frequent feedback, longer for orientation | One duration for every distance and priority |
-| Exaggeration | Extra contrast only where subtle feedback would be missed | Large travel, flashes or scale as default emphasis |
-| Solid drawing | Consistent weight and alignment across states | Scaling text or icons until they blur or jump |
+One dominant motion at a time: several surfaces moving at once compete for attention.
 
 ## Reduced motion policy
 
-Reduced motion means less movement, not no feedback. Keep: color and opacity changes that show state, focus rings, short fades for content appearing. Replace with a fade or a static state: parallax, zooms, large translations, page slides, spinning or bouncing decoration, autoplay video and scroll-scrubbed scenes. Remove: purely decorative loops.
+Reduced motion means less movement, not no feedback. Keep: color and opacity changes that show state, focus rings, short fades for content appearing. Replace with a fade or a static state: parallax, zooms, large translations, page slides, spinning or bouncing decoration, autoplay video and scroll-scrubbed scenes. Remove: purely decorative loops. Reduced motion is not the pause control that WCAG 2.2.2 requires for anything that moves on its own for more than five seconds next to other content; that control is needed whatever the setting.
 
 Flashing content is a separate, harder limit: WCAG 2.3.1 forbids content that flashes more than three times in any one-second period unless the flash stays below the general and red flash thresholds, whatever the user's settings.

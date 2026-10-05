@@ -49,14 +49,14 @@ headers.set('Access-Control-Allow-Credentials', 'true')
 
 // After
 const origin = request.headers.get('Origin')
+headers.append('Vary', 'Origin')
 if (origin !== null && allowedOrigins.has(origin)) {
   headers.set('Access-Control-Allow-Origin', origin)
   headers.set('Access-Control-Allow-Credentials', 'true')
-  headers.append('Vary', 'Origin')
 }
 ```
 
-`allowedOrigins` is built from the Worker's configuration.
+`allowedOrigins` is built from the Worker's configuration. `Vary: Origin` goes on every response, allowed or not; otherwise a shared cache can store the no-CORS response a disallowed origin got and serve it to the SPA.
 
 If the architecture forces a bearer token into JavaScript (a third-party API that only accepts headers), keep it in memory, short-lived, and refreshed through an `HttpOnly` cookie endpoint. It still dies to XSS while the tab is open, so the CSP and sanitizing rules below matter more.
 
@@ -160,13 +160,17 @@ Links:
 const SAFE_LINK_PROTOCOLS = new Set(['http:', 'https:', 'mailto:'])
 
 export function safeHref(raw: string, base: string): string | null {
-  if (!URL.canParse(raw, base)) return null
-  const url = new URL(raw, base)
+  let url: URL
+  try {
+    url = new URL(raw, base)
+  } catch {
+    return null
+  }
   return SAFE_LINK_PROTOCOLS.has(url.protocol) ? url.href : null
 }
 ```
 
-Call it with `window.location.origin` as `base`. Render nothing, or plain text, when it returns `null`. External links from users also get `rel="noopener noreferrer"`, plus `ugc` or `nofollow` on public pages.
+`URL.canParse` would read better, but it needs Chrome 120, Firefox 115 and Safari 17, newer than Vite 8's default targets (Chrome 111, Firefox 114, Safari 16.4). Vite lowers syntax, not missing APIs, so on those browsers it throws. The try/catch works everywhere. Call it with `window.location.origin` as `base`. Render nothing, or plain text, when it returns `null`. External links from users also get `rel="noopener noreferrer"`, plus `ugc` or `nofollow` on public pages.
 
 React 19 blocks `javascript:` URLs it renders into attributes, but not URLs your code hands to `navigate()`, `window.location`, `window.open`, an iframe `src` set imperatively, or a third-party component that sets the DOM itself. Validate before every navigation sink.
 
@@ -185,8 +189,13 @@ After:
 
 ```ts
 export function safeRedirectPath(raw: string | null, appOrigin: string, fallback: string): string {
-  if (!raw || !URL.canParse(raw, appOrigin)) return fallback
-  const target = new URL(raw, appOrigin)
+  if (!raw) return fallback
+  let target: URL
+  try {
+    target = new URL(raw, appOrigin)
+  } catch {
+    return fallback
+  }
   if (target.origin !== appOrigin || target.pathname.startsWith('//')) return fallback
   return `${target.pathname}${target.search}${target.hash}`
 }

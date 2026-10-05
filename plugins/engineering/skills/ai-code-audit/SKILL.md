@@ -1,6 +1,6 @@
 ---
 name: ai-code-audit
-description: Hostile audit of code an AI wrote or changed, including your own work, catching hallucinated packages, APIs and config, architectural drift, hidden failure paths, suppressed errors, placeholder logic, tests that cannot fail and unproven claims of done. Load it before saying a change is done, when reviewing an AI-written branch or pull request, and after any long agent session.
+description: Hostile audit of AI-written or AI-changed code, including your own: hallucinated packages, APIs and config, architectural drift, swallowed errors, placeholders, tests that cannot fail and unproven claims of done. Load before saying a change is done, when reviewing an AI-written branch or PR, and after long agent sessions.
 license: MIT
 metadata:
   author: Alex Tsanis
@@ -22,7 +22,7 @@ Two rules hold throughout:
 Run every step. Skipping a step because the change "looks simple" is how drift and fake fixes get through.
 
 1. **Pin the contract.** Write down what was asked, in the user's words, and what would prove it done. The audit measures the change against that, not against what the AI decided to build.
-2. **Collect the whole change.** Diff against the merge base, plus untracked files, generated files and the lockfile. AI agents often leave the important part in a file nobody looks at. Commands: [references/verification-commands.md](references/verification-commands.md).
+2. **Collect the whole change.** Diff the working tree against the merge base, so uncommitted edits count, plus untracked files, generated files and the lockfile. AI agents often leave the important part in a file nobody looks at. Commands: [references/verification-commands.md](references/verification-commands.md).
 3. **List the claims.** Everything the AI said it did: "added tests", "handled errors", "verified on Amoy", "no breaking changes", "fixed the race". Each one is a claim to prove or reject in step 10.
 4. **Hallucination pass.** For every new import, package, function call, option, config key, CLI flag, environment variable, route, database column, contract function and URL: find it in the installed source, lockfile, schema, migrations or docs for the pinned version. Anything you cannot find is a finding.
 5. **Drift pass.** For each concern the change touches (HTTP calls, data access, validation, errors, logging, config, auth, state, styling), find how the repository already does it and compare. A second way of doing something the codebase already does is a finding even when both work. Procedure: [references/architecture-drift.md](references/architecture-drift.md).

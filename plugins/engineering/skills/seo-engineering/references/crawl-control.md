@@ -1,3 +1,5 @@
+# Crawl control
+
 Read this when editing robots.txt, robots meta tags or `X-Robots-Tag` headers, protecting staging, taming faceted navigation, or setting policy for AI crawlers.
 
 ## Which mechanism does what
@@ -11,9 +13,9 @@ Read this when editing robots.txt, robots meta tags or `X-Robots-Tag` headers, p
 | Hide quickly from Google results | Search Console removals tool | Temporary, about six months |
 | Consolidate duplicates | 301/308 redirect, or `rel="canonical"` | Canonical is a hint; Google may pick another URL |
 
-Google no longer uses `noarchive` or `nocache`. `none` equals `noindex, nofollow`. `unavailable_after: <date>` drops a page after a date (useful for events and expiring listings).
+Google ignores `noarchive` (the cached link it controlled is gone) and `nocache`, which Google Search does not use. `none` equals `noindex, nofollow`. `unavailable_after: <date>` drops a page after a date (useful for events and expiring listings).
 
-## robots.txt behaviour that bites
+## robots.txt behavior that bites
 
 - A crawler obeys exactly one group: the most specific `User-agent` that matches it. `*` rules are not merged in. When you add a named group, copy every shared rule into it.
 - Google supports `*` and `$` in paths. `Disallow: /*?*sort=` blocks any URL with a `sort` parameter; `Disallow: /*.pdf$` blocks URLs ending in `.pdf`.
@@ -103,19 +105,19 @@ To give a PDF a canonical (for example, the HTML version of the same document), 
 
 Each vendor separates purposes. Block per purpose, in its own group, with shared rules repeated.
 
-| Token | Vendor | Purpose | Documented robots.txt behaviour |
+| Token | Vendor | Purpose | Documented robots.txt behavior |
 |---|---|---|---|
 | `Google-Extended` | Google | Gemini training and grounding | Control token only, no separate fetcher; no effect on Search inclusion or ranking |
-| `GPTBot` | OpenAI | Model training | Honours robots.txt |
-| `OAI-SearchBot` | OpenAI | ChatGPT search results | Honours robots.txt |
+| `GPTBot` | OpenAI | Model training | Honors robots.txt |
+| `OAI-SearchBot` | OpenAI | ChatGPT search results | Honors robots.txt |
 | `ChatGPT-User` | OpenAI | Fetches triggered by a user | "robots.txt rules may not apply" |
-| `ClaudeBot` | Anthropic | Model training | Honours robots.txt |
-| `Claude-SearchBot` | Anthropic | Search indexing | Honours robots.txt |
-| `Claude-User` | Anthropic | Fetches in response to a user query | Anthropic states its bots honour robots.txt |
-| `PerplexityBot` | Perplexity | Perplexity search results, not training | Honours robots.txt |
+| `ClaudeBot` | Anthropic | Model training | Honors robots.txt |
+| `Claude-SearchBot` | Anthropic | Search indexing | Honors robots.txt |
+| `Claude-User` | Anthropic | Fetches in response to a user query | Anthropic states its bots honor robots.txt |
+| `PerplexityBot` | Perplexity | Perplexity search results, not training | Honors robots.txt |
 | `Perplexity-User` | Perplexity | Fetches triggered by a user | "generally ignores robots.txt" |
 | `Applebot-Extended` | Apple | Opt out of foundation model training | Control token only; disallowing it does not remove the site from Apple search |
-| `CCBot` | Common Crawl | Open web crawl dataset | Honours robots.txt |
+| `CCBot` | Common Crawl | Open web crawl dataset | Honors robots.txt |
 
 Google's AI Overviews and AI Mode are part of Search. They are controlled by Googlebot access and by `nosnippet`, `data-nosnippet`, `max-snippet` and `noindex`, not by `Google-Extended`. Google states that no AI-specific text files such as `llms.txt` are needed to appear in those features.
 

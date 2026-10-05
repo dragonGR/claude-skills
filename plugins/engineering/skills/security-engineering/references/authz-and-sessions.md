@@ -153,7 +153,7 @@ Cookie settings: `__Host-` prefix (requires `Secure`, `Path=/`, no `Domain`), `H
 ## OAuth and OIDC login (client side)
 
 1. Start: generate `state`, `nonce` and a PKCE `code_verifier` from a CSPRNG; store them in the server session with the intended return path; send `code_challenge = BASE64URL(SHA256(verifier))` with `code_challenge_method=S256`.
-2. Callback: require `state` equal to the stored value, then delete the stored value so it is single-use. Reject if missing.
+2. Callback: require `state` equal to the stored value, then delete the stored value so it is single-use. Reject if missing. With more than one provider configured, also store which issuer the flow started with and require the response `iss` parameter (RFC 9207) to equal it before exchanging the code; for providers that do not send `iss`, give each one its own redirect URI. Without this mix-up defence, which RFC 9700 requires for multi-provider clients, a malicious or compromised provider can obtain a code the honest one issued.
 3. Exchange the code with the stored verifier at the token endpoint from discovery or config.
 4. Verify the ID token: signature with the issuer's keys, `iss` equal to the configured issuer, `aud` containing your client id, `exp`, and `nonce` equal to the stored one.
 5. Identify the user by `(iss, sub)`. Only use `email` to link to an existing account when the provider asserts `email_verified` and you trust that provider for the email's domain; otherwise require the user to log in to the existing account and link explicitly.

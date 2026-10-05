@@ -1,6 +1,6 @@
 {
   "name": "engineering",
-  "description": "Security, smart contracts, backend, database, infrastructure, Node.js, language, frontend, testing, performance and writing skills written for production work.",
+  "description": "Security, backend, database, infrastructure, Git, Node.js, TypeScript, Python, Rust, Solidity, React frontend, motion, accessibility, SEO, testing, performance, AI-code audit and writing skills for production work.",
   "author": {
     "name": "Alex Tsanis",
     "url": "https://github.com/dragonGR"
@@ -9,13 +9,26 @@
   "license": "MIT",
   "keywords": [
     "security",
-    "solidity",
-    "polygon",
-    "nodejs",
     "backend",
     "database",
-    "frontend",
+    "postgresql",
+    "infrastructure",
+    "kubernetes",
+    "github-actions",
+    "git",
+    "nodejs",
+    "typescript",
+    "python",
+    "rust",
+    "solidity",
+    "polygon",
+    "react",
+    "vite",
+    "accessibility",
+    "seo",
     "testing",
+    "performance",
+    "code-review",
     "writing"
   ]
 }

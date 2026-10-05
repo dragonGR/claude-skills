@@ -86,27 +86,60 @@ CREATE INDEX CONCURRENTLY orders_tenant_created_id_idx
   ON orders (tenant_id, created_at DESC, id DESC);
 
 -- first page
-SELECT id, created_at, total_minor
+SELECT id, created_at, total_minor, created_at::text AS created_at_key
 FROM orders
 WHERE tenant_id = $1
 ORDER BY created_at DESC, id DESC
 LIMIT $2;
 
 -- next page: strictly after the last row of the previous page
-SELECT id, created_at, total_minor
+SELECT id, created_at, total_minor, created_at::text AS created_at_key
 FROM orders
 WHERE tenant_id = $1
-  AND (created_at, id) < ($3, $4)
+  AND (created_at, id) < ($3::timestamptz, $4::uuid)
 ORDER BY created_at DESC, id DESC
 LIMIT $2;
+```
+
+Bind `$2` as the page size plus one; if the extra row comes back there is a next page, and the cursor is built from the last row you return. No `COUNT` needed.
+
+```ts
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export type OrderCursor = { createdAt: string; id: string };
+
+export function encodeCursor(cursor: OrderCursor): string {
+  return Buffer.from(JSON.stringify([cursor.createdAt, cursor.id]), "utf8").toString("base64url");
+}
+
+export function decodeCursor(raw: string, maxLength: number): OrderCursor {
+  if (raw.length > maxLength) throw new BadRequestError("invalid cursor");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
+  } catch {
+    throw new BadRequestError("invalid cursor");
+  }
+  if (
+    !Array.isArray(parsed) ||
+    parsed.length !== 2 ||
+    typeof parsed[0] !== "string" ||
+    typeof parsed[1] !== "string" ||
+    Number.isNaN(Date.parse(parsed[0])) ||
+    !UUID_PATTERN.test(parsed[1])
+  ) {
+    throw new BadRequestError("invalid cursor");
+  }
+  return { createdAt: parsed[0], id: parsed[1] };
+}
 ```
 
 Details that break it in practice:
 
 - The tiebreaker (`id`) must be unique and part of both `ORDER BY` and the row comparison, or rows sharing a timestamp are skipped or repeated at page edges.
-- PostgreSQL timestamps have microsecond resolution and JavaScript `Date` has milliseconds. A cursor that round-trips `created_at` through `Date` truncates it, and the next page repeats or skips rows. Put the database's own text form in the cursor (`created_at::text`) and bind it back as `timestamptz`.
-- The cursor is client input. Decode it with a strict schema, reject malformed values with a 400, and never let it carry `tenant_id` or filters; those come from the session and the validated query.
-- Clamp the page size to a configured maximum. Fetch `limit + 1` rows to know whether another page exists without a `COUNT`.
+- PostgreSQL timestamps have microsecond resolution and JavaScript `Date` has milliseconds. A cursor that round-trips `created_at` through `Date` truncates it, and the next page repeats or skips rows. The cursor carries `created_at_key`, the database's own text form, bound back as `timestamptz`.
+- The cursor is client input. It only says where to resume: reject malformed values with a 400, and never let it carry `tenant_id`, filters or the page size; those come from the session and the validated query on every page.
+- Clamp the page size to a maximum from configuration.
 - Every filter the endpoint accepts either appears as a leading equality column of the index or is cheap to apply to the rows the index returns. Confirm with `EXPLAIN`.
 
 SQLite (3.15+) and D1 support row values, and SQLite documents `(a, b) > (?, ?) ORDER BY a, b LIMIT ?` as the efficient replacement for `OFFSET` when a matching index exists.

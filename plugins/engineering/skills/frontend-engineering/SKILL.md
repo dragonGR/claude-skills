@@ -10,7 +10,7 @@ metadata:
 
 A Vite SPA is a folder of static files that anyone can download, read and run with the network tab open. Every request it makes can be replayed, edited or sent by a script that never loaded the app. The bugs that cost money or leak data are rarely about markup: they are trust placed in the client, secrets compiled into the bundle, state with two owners, and async code that assumes each response arrives once, in order, and means what it says.
 
-Read `package.json`, `vite.config.*`, the router setup and the `QueryClient` setup before writing code. Check which React Router mode the app uses (`<BrowserRouter>` is declarative mode; `createBrowserRouter` with `<RouterProvider>` is data mode), because loaders, `errorElement`, route `lazy` and `<ScrollRestoration>` exist only in data mode. Match the installed majors and minors, not memory: React Router 8 removed the `react-router-dom` package, and recent TanStack Query v5 minors deprecate `ensureQueryData`, `fetchQuery` and `prefetchQuery` in favor of `queryClient.query`.
+Read `package.json`, `vite.config.*`, the router setup and the `QueryClient` setup before writing code. Check which React Router mode the app uses (`<BrowserRouter>` is declarative mode; `createBrowserRouter` with `<RouterProvider>` is data mode), because loaders, `errorElement`, route `lazy` and `<ScrollRestoration>` exist only in data mode. Match the installed majors and minors, not memory: React Router 8 removed the `react-router-dom` package, and TanStack Query 5.102 and later deprecate `ensureQueryData`, `fetchQuery` and `prefetchQuery` in favor of `queryClient.query`, which is not a drop-in rename (see `react-router-spa.md`).
 
 ## Failure catalogue
 
@@ -50,7 +50,7 @@ Each entry: what it looks like in a diff, why it breaks, what to do instead. Lon
 
 **Hydration bugs imported from SSR advice.** An app mounted with `createRoot` never hydrates: there is no server HTML to match, so hydration mismatches, `suppressHydrationWarning` and `getServerSnapshot` do not apply. Do not add `typeof window` guards or mount-then-render workarounds for a problem the app does not have. If the marketing site adds build-time prerendering and switches to `hydrateRoot`, every rule about time, locale, randomness and browser-only reads during the first render applies again; see `vite-build-and-deploy.md`.
 
-**Layout shift from media.** `<img>` without `width`/`height` or an `aspect-ratio`, late-loading fonts and banners that push content down. Reserve the space up front.
+**Slow interactions.** Typing into a filter re-renders a 5,000-row table on every keystroke, and the input lags because the keystroke and the expensive render happen in one urgent render. Keep the input's own state urgent and move the expensive part out of it: pass `useDeferredValue(query)` to a list wrapped in `memo` (without `memo` the list re-renders during the urgent update anyway), or set the filter state inside `startTransition`. React then paints the input first and abandons a stale list render when the next key arrives. Virtualize long lists. Neither helps when the slow part is synchronous work in the event handler itself; that work has to shrink or move off the main thread. Measure with the React Profiler on a profiling build: the plain production build disables it, so alias `react-dom/client` to `react-dom/profiling`.
 
 ### State ownership
 
@@ -59,8 +59,6 @@ Each entry: what it looks like in a diff, why it breaks, what to do instead. Lon
 **Zustand selector that returns a new object.** `const { items, add } = useCart((s) => ({ items: s.items, add: s.add }))`. Zustand 5 documents that a selector returning a new reference may cause an infinite loop, which React reports as "Maximum update depth exceeded". Select each value separately, or wrap the selector in `useShallow` from `zustand/shallow`.
 
 **Persisted store without a version or a boundary.** `persist` with only a `name` stores the whole store, server data and tokens included, in `localStorage`. When the shape changes, old data rehydrates into new code. Persist only client-owned preferences with `partialize`, bump `version` and write `migrate` when the shape changes (a version mismatch without `migrate` discards the stored value), and reset user-scoped stores on sign-out.
-
-**Effect used for derived state.** `useEffect(() => setFullName(first + ' ' + last), [first, last])` renders once with stale output, then again. Compute during render. To reset state when an id changes, put `key={id}` on the component.
 
 **Query key missing an input.** `useQuery({ queryKey: ['projects', orgId], queryFn: () => fetchProjects(orgId, status, page) })`. Changing `status` or `page` returns the cached page for the wrong filter. Every value the `queryFn` reads goes in the key. Use a key factory per resource so mutations invalidate the same shape.
 
@@ -72,13 +70,11 @@ Each entry: what it looks like in a diff, why it breaks, what to do instead. Lon
 
 **Stale closures.** A `setInterval` or subscription callback created once reads the `count` or `userId` from the first render forever. Use functional updates, include the value in the effect's dependencies, or read the latest value through `useEffectEvent` (React 19.2) or a ref.
 
-**Controlled/uncontrolled switch.** `<input value={user?.name} />` is uncontrolled while `user` loads and controlled after. Use `value={user?.name ?? ''}`, or render the form only once data exists.
-
-**Index keys on lists that reorder, filter or delete.** With `key={index}`, deleting row 2 hands row 3's input text or open menu to row 2. Key by a stable id from the data; never generate keys in render.
-
 ### Async flows and mutations
 
 **Effect races and missing cleanup.** A search effect fetches on every keystroke and the response for "re" lands after the one for "react". Abort the previous request in cleanup (`AbortController`), or use TanStack Query, which keys results by input. Every effect that subscribes, listens or starts a timer returns cleanup. Strict Mode's development double mount exists to expose missing cleanup; fix the effect rather than removing Strict Mode.
+
+**`use()` on a promise made during render.** `const user = use(fetchUser(id))`, or `use(fetch(url).then((r) => r.json()))`, in a component. Each render creates a new promise, and React keeps no state for a render that suspended before mounting, so every retry suspends on a fresh promise: the fallback never resolves and the request repeats. `use` needs a promise that outlives the render: one started in a route loader or event handler, or read from a cache keyed by the input. With TanStack Query, use `useSuspenseQuery` instead.
 
 **Request waterfalls.** A parent `useQuery` renders a child with its own `useQuery`, which renders a grandchild with another; or a lazy route whose component must download before its data request starts. Start independent requests together, hoist data needs to the route (a data-mode loader that starts the queries into the `QueryClient` cache), and load a lazy route's component and loader in parallel.
 
@@ -104,7 +100,7 @@ Each entry: what it looks like in a diff, why it breaks, what to do instead. Lon
 
 **Not-found and forbidden that differ.** The UI shows "You don't have access" for another tenant's invoice and "Not found" for a missing one, confirming which ids exist. The API returns the same 404 for both, and the UI renders the same page.
 
-**Focus left behind on navigation.** A client-side route change swaps the page without a document load, so focus stays on a removed link or falls to `<body>`, and nothing announces the new page. React Router does not manage this. Set `document.title` per route and move focus to the new page's heading on mount; the `accessibility` skill has the component.
+**Focus left behind on navigation.** A client-side route change swaps the page without a document load, so focus stays on a removed link or falls to `<body>`, and nothing announces the new page. React Router does not manage this. Give every route a unique title through one mechanism (React 19's `<title>` or `react-helmet-async`, never an extra `document.title` effect beside them) and move focus to the new page's heading on mount; the `accessibility` skill has both.
 
 **Exit animation that renders the wrong page.** `<AnimatePresence>` around `<Outlet />` or an unkeyed `<Routes>`: the exiting copy renders the new route. The `react-motion` skill covers the `useOutlet` and keyed `<Routes location>` patterns and their scroll and focus interactions.
 
@@ -163,7 +159,7 @@ export const env = PublicEnv.parse({
 })
 ```
 
-Each name is written out because Vite statically replaces `import.meta.env.VITE_X` at build time, and its docs note that computed access such as `import.meta.env['BASE_URL']` is not replaced. Everything in this schema ships to the browser, so it holds only public values.
+Each name is written out because Vite replaces each `import.meta.env.VITE_X` with its literal at build time, while a bare or computed `import.meta.env` becomes an object holding every exposed variable, which lands in that chunk. Naming each read keeps this module the only place that decides what env reaches the code. Everything in this schema ships to the browser, so it holds only public values.
 
 ## Decision rules
 
@@ -183,7 +179,7 @@ Where state lives:
 - `useMutation` or React Actions: when the resource already lives in TanStack Query, mutate with `useMutation` so invalidation and rollback sit next to the cache. Use `useActionState` for forms whose result stays inside the form (field errors, a confirmation), and invalidate the query cache from the action when it changes server data.
 - Optimistic or pessimistic: optimistic for reversible, low-stakes, usually-successful actions (like, rename, reorder, toggle). Pessimistic with an explicit pending state for payments, transfers, irreversible deletes, permission changes and anything on-chain.
 - Retry: automatic retry only for reads and idempotent writes. A non-idempotent write retries only with the same idempotency key, after the unknown-outcome check.
-- Effects: if the value can be computed from props and state, compute it. If it responds to a user event, put it in the handler. Use an effect only to synchronize with something outside React.
+- Effects: if the value can be computed from props and state, compute it. If it responds to a user event, put it in the handler. Use an effect only to synchronize with something outside React. To reset a subtree's state when an identity changes, change its `key`.
 - Memoization: add `memo`, `useMemo` and `useCallback` where the Profiler shows wasted renders, or rely on React Compiler if the project has adopted it.
 
 ## Review checklist
@@ -210,10 +206,10 @@ Where state lives:
 ## References
 
 - [security-boundaries.md](references/security-boundaries.md): read when code touches auth, tokens, env vars, the API contract, user HTML or markdown, links or redirects.
-- [state-and-async.md](references/state-and-async.md): read when writing effects, queries, mutations, optimistic updates, Zustand stores, forms, URL state or list rendering.
+- [state-and-async.md](references/state-and-async.md): read when writing effects, queries, mutations, optimistic updates, Zustand stores, forms or URL state.
 - [vite-build-and-deploy.md](references/vite-build-and-deploy.md): read before changing `vite.config`, env handling, build scripts, source maps, the dev server, caching headers, the SPA fallback or prerendering.
 - [react-router-spa.md](references/react-router-spa.md): read when adding or changing routes, lazy loading, loaders, error boundaries, not-found handling or navigation side effects.
 - [web3-frontends.md](references/web3-frontends.md): read when the UI connects a wallet, requests signatures or sends transactions.
 - [react-upgrades.md](references/react-upgrades.md): read for React, React Router, Vite, TanStack Query, Zustand or wagmi major upgrades and class-to-hook conversions.
 
-Related skills: `security-engineering` for the API side and contract audits, `typescript-engineering` for types and runtime validation, `accessibility` for focus and semantics, `react-motion` for route and exit animations, `seo-engineering` for metadata and crawlability on the marketing site, `test-engineering` for testing async UI, `performance-benchmarking` for measurement.
+Related skills: `security-engineering` for the API side and contract audits, `typescript-engineering` for types and runtime validation, `accessibility` for focus and semantics, `react-motion` for route and exit animations, `seo-engineering` for metadata and crawlability on the marketing site, `test-engineering` for testing async UI, `performance-benchmarking` (its browser reference) for measuring INP and frame-time regressions (the React-side fixes are the "Slow interactions" entry above).

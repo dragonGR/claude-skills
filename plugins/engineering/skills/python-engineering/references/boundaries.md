@@ -90,18 +90,7 @@ SQLAlchemy's `text()`, `literal_column()`, `order_by(text(...))` and `.where(tex
 
 ## Paths, uploads and archives
 
-Client-supplied names should not become paths. Store uploads under a generated id, keep the original name only as metadata, and serve downloads by id after an ownership check. When a name must map to a path:
-
-```python
-def safe_child(base: Path, name: str) -> Path:
-    root = base.resolve()
-    target = (root / name).resolve()
-    if not target.is_relative_to(root):
-        raise PermissionError(name)
-    return target
-```
-
-`resolve()` follows symlinks, so a symlink inside `root` pointing outside is also rejected. The check does not stop a race where the path is swapped between check and open; if other users can write inside `root`, open with `O_NOFOLLOW` or keep untrusted writers out of served directories. `is_relative_to` is 3.9+; on older versions compare `os.path.commonpath`.
+Client-supplied names should not become paths. Store uploads under a generated id, keep the original name only as metadata, and serve downloads by id after an ownership check. When a name must map to a path, use `safe_child` from SKILL.md. `resolve()` follows symlinks, so a symlink inside `root` pointing outside is also rejected. The check does not stop a race where the path is swapped between check and open; if other users can write inside `root`, open with `O_NOFOLLOW` or keep untrusted writers out of served directories.
 
 Traversal is only a finding if the name can contain the dangerous characters: framework path segments often cannot contain `/`, while query parameters, form fields, JSON bodies and archive member names can.
 
@@ -114,10 +103,11 @@ with tarfile.open(archive_path) as tar:
         raise ArchiveRejected("too many members")
     if sum(m.size for m in members) > cfg.max_archive_bytes:
         raise ArchiveRejected("too large")
+    dest = Path(tempfile.mkdtemp(dir=cfg.extract_root))
     tar.extractall(dest, filter="data")
 ```
 
-`filter="data"` (3.12+, backported to some older security releases, default from 3.14) strips leading slashes and refuses members or link targets that land outside `dest`, as well as device files. It does not limit size. `zipfile` strips absolute paths and `..` when extracting, but zip bombs still need the size and count checks, using `ZipInfo.file_size` and stopping when actual bytes written exceed the limit, since headers can lie.
+`filter="data"` (3.12+, 3.11.4+, the default from 3.14) strips leading slashes and refuses members or link targets that land outside `dest`, as well as device files. It does not limit size. It is also only as good as the patch release it runs on. Before 3.11.13, 3.12.11, 3.13.4 and 3.14.0, crafted symlinks and long paths got past it and wrote outside `dest` (CVE-2025-4517 and three related CVEs from June 2025), and further link and hardlink bypasses were fixed in patch releases through 2026. Check the runtime's exact patch version. Extracting into a fresh directory from `mkdtemp` defeats bypasses that depend on knowing the destination's name (CVE-2026-19672 is one), and lets the caller delete the whole tree on failure. `zipfile` strips absolute paths and `..` when extracting, but zip bombs still need the size and count checks, using `ZipInfo.file_size` and stopping when actual bytes written exceed the limit, since headers can lie.
 
 Temporary files: `NamedTemporaryFile`, `mkstemp` (created with mode 0600) or `TemporaryDirectory`, never `mktemp()` or a fixed name. On 3.12+, `NamedTemporaryFile(delete_on_close=False)` lets you close the file, hand the path to a subprocess, and still have it removed when the context exits.
 
@@ -126,11 +116,11 @@ Temporary files: `NamedTemporaryFile`, `mkstemp` (created with mode 0600) or `Te
 | Input | Safe | Unsafe |
 |---|---|---|
 | JSON | `json.loads`, then a Pydantic model | `jsonpickle` |
-| YAML | `yaml.safe_load` | `yaml.load(..., Loader=yaml.Loader)` or `UnsafeLoader` |
+| YAML | `yaml.safe_load` | `yaml.unsafe_load`, `yaml.load(..., Loader=yaml.Loader)` or `UnsafeLoader` |
 | Python objects across a trust boundary | JSON plus a schema; `hmac`-signed payload verified before loading | `pickle`, `shelve`, `joblib.load`, `pandas.read_pickle`, `marshal` |
 | Expressions | a small parser for the grammar you need | `eval`, `exec` |
 
-PyYAML 6 made the `Loader` argument mandatory, so unsafe loading is always explicit in the call: search for `Loader=` and check which one.
+PyYAML 6 made the loader argument mandatory, so unsafe loading is always explicit, but not always spelled `Loader=`: `yaml.unsafe_load(stream)` takes no loader, and `yaml.load(data, yaml.Loader)` passes it positionally. Search for `yaml.load`, `load_all` and `unsafe_load`, and check which loader each call ends up with.
 
 Treat caches and queues as boundaries. A pickled value in Redis is executed by whoever reads it, so write access to the cache becomes code execution in every worker. Use JSON, or sign and verify.
 

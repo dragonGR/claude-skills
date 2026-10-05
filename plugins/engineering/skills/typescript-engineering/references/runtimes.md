@@ -51,7 +51,7 @@ Call it as `ctx.waitUntil(...)`. Destructuring `const { waitUntil } = ctx` loses
 ### Configuration and bindings
 
 - Secrets, variables and bindings arrive on the `env` argument of the handler. Validate the parts you need at the top of the handler (or once per isolate, cached in module scope, since `env` does not change between requests of one deployment).
-- Node built-in modules (`node:crypto`, `node:buffer`, `node:stream`, `AsyncLocalStorage`) depend on Node compatibility, which is controlled by `compatibility_date` and `compatibility_flags` in the Wrangler config. Check the config instead of assuming; a missing flag shows up as an import error at runtime.
+- Node built-ins (`node:crypto`, `node:buffer`, `node:stream`, `AsyncLocalStorage`) need Node compatibility. It is on by default for a `compatibility_date` of 2026-08-04 or later; older dates need `compatibility_flags: ["nodejs_compat"]`, and without it the import fails at runtime. Moving the compatibility date forward changes runtime behavior (from 2026-02-10 with Node compatibility on, global `setTimeout` returns a Node `Timeout` object instead of a number), so treat it like a dependency upgrade and read the flags the new date turns on.
 - `fetch()` and access to request context are not allowed during script startup. Keep module scope free of I/O.
 
 ### Memory and bodies
@@ -66,21 +66,24 @@ A Worker has a 128 MB memory limit. `await request.text()`, `arrayBuffer()` or `
 
 ## Node with built-in type stripping
 
-Recent Node versions (22.18+, 23.6+) run `.ts` files directly by erasing type annotations. They do not type-check and do not read `tsconfig.json`.
+Node 22.18 and every later line run `.ts` files directly by erasing type annotations, unflagged; it is stable from 24.12 and 25.2. Node does not type-check and does not read `tsconfig.json`.
 
 - Syntax that needs code generation is not supported: `enum`, namespaces containing values, constructor parameter properties (`constructor(private readonly db: Db)`) and import aliases. Set `erasableSyntaxOnly` so `tsc` rejects them before Node does. Decorators are a parse error in Node as well.
 - Type-only imports must say so (`import type { User }` or `import { type User }`). Otherwise Node keeps the import, and the module it names exports nothing at runtime, so startup fails. `verbatimModuleSyntax` enforces this in `tsc`.
 - `paths` aliases from `tsconfig.json` do not apply. Use `package.json` `imports` (`#db`) or relative paths.
+- Relative imports name the file as it exists on disk (`./util.ts`, not `./util`). `.tsx` files are not supported.
+- Node refuses to strip types in files under `node_modules`. A package published as `.ts` source fails for every consumer; publish compiled JavaScript.
+- Node 26 removed `--experimental-transform-types`, and a script that still passes it fails to start. Code that needed it (enums, parameter properties) has to be rewritten as erasable syntax or run through tsx.
 - `tsc --noEmit` in CI is the only type check.
 
 ## Bun
 
 - Bun runs TypeScript without type-checking; CI still needs `tsc --noEmit`.
-- Bun does not run dependency lifecycle scripts unless the package is in `trustedDependencies` or Bun's default allowlist. A dependency that relies on its `postinstall` (native builds, binary downloads) installs without error and breaks when first used. Add that one package to the list deliberately rather than turning scripts back on for everything.
+- Bun does not run dependency lifecycle scripts unless the package is in `trustedDependencies` or Bun's default allowlist. A dependency that relies on its `postinstall` (native builds, binary downloads) installs without error and breaks when first used. Add that package to `trustedDependencies` deliberately rather than turning scripts back on for everything. Defining the field replaces Bun's default allowlist instead of extending it, so also list the default-trusted packages the project relies on (the default list is `src/install/default-trusted-dependencies.txt` in the Bun repository).
 
 ## Browser and shared code
 
 - Code shared between server and browser must not read secrets or `process.env` at module scope. Bundlers inline only explicitly public variables; anything else is either `undefined` in the browser or, worse, a secret shipped to it (frontend-engineering covers the framework rules).
 - `AbortSignal.timeout` counts active time. In a suspended worker or a page in the back-forward cache the timer pauses, so a client-side deadline is not a server-side guarantee.
 - `structuredClone`, `postMessage` and storage round-trips return plain objects: class instances lose their prototype, so methods and `instanceof` checks fail after the round-trip. Validate the data again on the receiving side.
-- `instanceof Error` is false for errors created in another realm (iframes, `vm` contexts). `Error.isError` checks brand instead, but it is not yet available in every browser; branch on `name` or a `code` field in shared code.
+- `instanceof Error` is false for errors created in another realm (iframes, `vm` contexts). `Error.isError` checks the internal brand instead (Node 24.3+, current Chrome, Firefox and Safari), but Safari and Bun return `false` for a `DOMException`, which is what an aborted or timed-out `fetch` rejects with. Branch on `name` or a `code` field in shared code.

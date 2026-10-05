@@ -104,16 +104,18 @@ ignore = [
 ]
 
 [licenses]
-allow = ["MIT", "Apache-2.0"]
+allow = ["MIT", "Apache-2.0", "Unicode-3.0", "Zlib"]
 
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
 
-[bans.build]
-allow-build-scripts = [
-    # { name = "ring" },
-]
+# To seed: uncomment with an empty list, run `cargo deny check bans`, review each crate it reports as build-script-not-allowed and add it here.
+# [bans.build]
+# allow-build-scripts = [
+#     { name = "libc" },
+#     { name = "proc-macro2" },
+# ]
 
 [sources]
 unknown-registry = "deny"
@@ -121,8 +123,8 @@ unknown-git = "deny"
 ```
 
 - `advisories` checks the RustSec database for vulnerable, unmaintained and yanked crates. Every `ignore` entry carries a reason; an ignore without one is a finding.
-- `licenses` denies anything not in `allow`. Adjust the list to the project's actual policy.
-- `bans.build.allow-build-scripts`, when present, lists the crates allowed to have a build script; everything else fails. It turns "a transitive dependency grew a build.rs" into a reviewed change.
+- `licenses` denies anything not in `allow`. Adjust the list to the project's actual policy. `Unicode-3.0` (the ICU crates under `url`) and `Zlib` (`foldhash`, the default hasher of recent hashbrown) arrive with very common dependencies, so an MIT and Apache-2.0 list alone usually fails.
+- `bans.build.allow-build-scripts`, when present, lists the crates allowed to have a build script; everything else fails. An empty list fails on libc, proc-macro2 and serde in almost any graph, which is why the template keeps the table commented out. To seed it, uncomment the table with an empty list, run `cargo deny check bans`, review each crate it reports as `build-script-not-allowed` and add it, and from then on a transitive dependency that grows a `build.rs` becomes a reviewed change. A `[bans.build]` table also turns on the `executables` check, which fails on native binaries shipped inside crates that have build scripts or are proc macros.
 - `sources` with `unknown-registry` and `unknown-git` set to `deny` stops a dependency from being pulled from an unexpected git URL or registry.
 
 `cargo audit` covers the advisories check alone and is fine where cargo-deny is not set up.

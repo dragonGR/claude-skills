@@ -8,6 +8,7 @@ Read this before writing or reviewing a function-level benchmark, or before trus
 - Hide inputs from the optimizer and consume every output.
 - Keep setup out of the timer and real costs (GC, drop, allocation) inside it.
 - Keep baseline and candidate in the same file or the same harness run so they share machine state. Save the baseline under a name and compare against it.
+- The base-then-candidate recipes below are the minimum. If you run all of A and then all of B, the variant that runs second inherits a hotter chip, a different neighbor or a background job. When the effect is near the noise floor, build both once and run them as alternating pairs, as the Go example does and environment-and-ci.md describes.
 - Run the correctness gate on the candidate first. A benchmark of a wrong function is worthless.
 - Check scaling: 10x the input should take roughly the time the algorithm predicts. A flat line means the work was optimized away or cached.
 
@@ -16,7 +17,7 @@ Read this before writing or reviewing a function-level benchmark, or before trus
 ```toml
 # Cargo.toml
 [dev-dependencies]
-criterion = "<current version>"
+criterion = "0.8.2"
 
 [[bench]]
 name = "parse"
@@ -61,7 +62,7 @@ criterion_main!(benches);
 
 ```toml
 [dev-dependencies]
-divan = "<current version>"
+divan = "0.1.21"
 
 [[bench]]
 name = "parse"
@@ -122,7 +123,7 @@ python -m pyperf check candidate.json           # warns on unstable results
 
 - Defaults are 20 worker processes with 3 values each (6 and 10 under a JIT) plus warm-ups. `--rigorous` doubles the processes and `--fast` is for rough answers only.
 - `compare_to` runs a two-sample t-test and says "not significant" when it cannot tell the runs apart. Report that verdict. Don't report the raw percentages as a win.
-- `check` warns when the standard deviation exceeds 10% of the mean, or when single values are under a millisecond (too short to time reliably).
+- `check` warns when the standard deviation exceeds 10% of the mean, or when the shortest raw value (one timed batch of calibrated loops, not a single call) is under a millisecond.
 
 ## Python: pytest-benchmark
 
@@ -144,6 +145,7 @@ pytest --benchmark-only --benchmark-compare --benchmark-compare-fail=median:5%
 ```
 
 - `--benchmark-compare` with no argument compares against the latest saved run. `--benchmark-compare-fail` takes `stat:percent` (`min:5%`) or `stat:seconds` (`mean:0.001`).
+- That check is a threshold on one statistic, not a significance test (5.3.0 computes `current / previous * 100 - 100`). A 5% gate on a benchmark whose runs differ by 8% fails at random, and a real 4% regression passes. Measure the A/A spread first and set the threshold above it.
 - Saved runs from another machine are not a baseline. Autosave on the same runner in the same job.
 - `--benchmark-disable-gc` hides GC cost. Leave GC on unless you are deliberately isolating it.
 - `--benchmark-disable` runs each benchmark once with no timing, which is a cheap way to keep benchmark code from rotting in the normal test run.
@@ -227,13 +229,18 @@ func BenchmarkParseHeader(b *testing.B) {
 ```
 
 ```bash
-go test -run='^$' -bench=ParseHeader -count=10 > old.txt   # base revision
-go test -run='^$' -bench=ParseHeader -count=10 > new.txt   # candidate
-benchstat old.txt new.txt
+go test -c -o "$OUT/old.test" ./parser     # on the base revision
+go test -c -o "$OUT/new.test" ./parser     # on the candidate
+cd parser    # go test runs from the package directory, and testdata paths depend on it
+for i in $(seq "$RUNS"); do
+  "$OUT/old.test" -test.run='^$' -test.bench=ParseHeader >> "$OUT/old.txt"
+  "$OUT/new.test" -test.run='^$' -test.bench=ParseHeader >> "$OUT/new.txt"
+done
+benchstat "$OUT/old.txt" "$OUT/new.txt"
 ```
 
-- `b.Loop` (Go 1.24+) keeps arguments and results inside the loop alive and resets the timer on its first call, so setup before the loop is excluded. With the older `for i := 0; i < b.N; i++` form, assign results to a package-level sink and call `b.ResetTimer()` after setup.
-- benchstat wants at least 10 runs per side. `~` in its output means no significant difference.
+- `b.Loop` keeps arguments and results inside the loop alive and resets the timer on its first call, so setup before the loop is excluded. It arrived in Go 1.24, but on 1.24 and 1.25 it also blocked inlining in the loop body, which added allocations and slowed some benchmarks. Since Go 1.26 it no longer does, so use 1.26 or later and don't compare `b.Loop` results across that boundary. With the older `for i := 0; i < b.N; i++` form, assign results to a package-level sink and call `b.ResetTimer()` after setup.
+- benchstat wants at least 10 runs per side (`RUNS` above), and its docs say to pick a count and stick to it. `~` in its output means no significant difference.
 
 ## Command-line programs: hyperfine
 
@@ -243,4 +250,4 @@ hyperfine --prepare 'sync; echo 3 | sudo tee /proc/sys/vm/drop_caches' 'new-tool
 hyperfine -N 'new-tool --version'   # no intermediate shell, for very short commands
 ```
 
-`--parameter-scan` varies one parameter across a range, which is how to show scaling. Check exit codes: hyperfine fails on a non-zero exit unless `--ignore-failure` is set, and a benchmark that exits early is fast for the wrong reason.
+hyperfine finishes every run of the first command before it starts the second, so the second inherits whatever heat or background load built up. For small differences, repeat the whole invocation with the commands in swapped order and check the ranking holds. `--parameter-scan` varies one parameter across a range, which is how to show scaling. Check exit codes: hyperfine fails on a non-zero exit unless `--ignore-failure` is set, and a benchmark that exits early is fast for the wrong reason.

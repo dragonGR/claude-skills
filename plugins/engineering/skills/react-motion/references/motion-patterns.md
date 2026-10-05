@@ -1,8 +1,8 @@
 # Motion patterns
 
-Read this when writing or reviewing presence, dialogs, animated lists, layout animation, scroll-linked effects, first-load entrances or React Router route transitions with Motion. Each pattern shows the broken version first. Constants are named so the values live in one place; put them in the project's shared motion module.
+Read this when writing or reviewing presence, dialogs, animated lists, layout animation, scroll-linked effects, first-load entrances, view transitions or React Router route transitions. Each pattern shows the broken version first. Constants are named so the values live in one place; put them in the project's shared motion module.
 
-The examples import from `framer-motion`. `motion/react` re-exports the same module, so every name here is available from either path; use the one the codebase already uses.
+The examples import from `motion/react`, the entry point of the `motion` package that new code should install. `framer-motion` is the same library under its old name and exports the same names, so in a codebase that already uses it, keep its import path rather than mixing the two.
 
 ## Presence: keys, placement and committed work
 
@@ -75,11 +75,43 @@ A presence boundary wrapped in a condition never runs exits:
 
 ## Animated dialog: focus and inert exit
 
-This covers only the part animation owns. A dialog primitive (native `<dialog>`, Radix, React Aria) still provides the focus trap, Escape and scroll locking; with Radix, render `Dialog.Portal` and `Dialog.Content` with `forceMount` inside `AnimatePresence` so they stay mounted for the exit.
+### Native `<dialog>`: animate in CSS
+
+Never put a native `<dialog>` inside `AnimatePresence`. Unmounting it skips the close algorithm, so focus is not returned; the `accessibility` skill's `Modal` stays mounted for that reason. The Motion order of focus first, exit second does not work either: while the dialog is modal everything outside it is inert, so focusing the trigger before `close()` does nothing, and once `close()` runs the dialog loses `open` and, without a CSS transition on `display`, disappears in the same frame. Let `close()` return focus, and animate open and close in CSS:
+
+```css
+:root {
+  --motion-surface: 150ms;
+}
+
+dialog {
+  opacity: 0;
+  transition:
+    opacity var(--motion-surface),
+    display var(--motion-surface) allow-discrete,
+    overlay var(--motion-surface) allow-discrete;
+}
+
+dialog[open] {
+  opacity: 1;
+}
+
+@starting-style {
+  dialog[open] {
+    opacity: 0;
+  }
+}
+```
+
+`@starting-style` gives the entrance a start value, and `allow-discrete` holds `display` (and `overlay`, which keeps the dialog in the top layer) until the fade ends. `@starting-style` and `transition-behavior` have been Baseline since August 2024; `overlay` is Chromium only. In Firefox and Safari the closing dialog leaves the top layer as soon as the exit starts and can drop behind other content, so keep the exit a short opacity fade. Put any movement (`translate`) inside `@media (prefers-reduced-motion: no-preference)`. When the dialog's action removes the trigger (Delete on a row), `close()` focuses a node that is about to be detached. Move focus to the next row or the list heading after `close()` has run, from an effect in the parent: in one commit React runs the `Modal`'s effect (which calls `close()`) before its parent's, and by then the page is no longer inert.
+
+### Dialogs that render a plain element
+
+The Motion pattern below is for dialogs that render an ordinary element you can keep mounted: Radix with `forceMount` on `Dialog.Portal` and `Dialog.Content` inside `AnimatePresence`, React Aria, or a custom modal. `ConfirmSurface` stands in for the content element. It is not a complete modal: it has no focus trap, no inert background and no Escape handling, and it must not ship without a primitive that provides them or your own code that meets the `accessibility` skill's full list. With Radix, leave focus return to Radix. Its focus trap stays active until React re-renders with `open={false}`, so a `focus()` call in the click handler is pulled back into the content. Radix focuses `Dialog.Trigger` when `Dialog.Content` unmounts, which is after the exit, and the rest of the page stays `aria-hidden` until then. When the trigger will be gone (the dialog deleted its row), pass `onCloseAutoFocus` that calls `event.preventDefault()` and focuses the next row or the list heading. Keep the exit short, because focus has no useful place to be until it ends.
 
 ```tsx
 import { useId, useRef, useState } from 'react'
-import { AnimatePresence, motion, useIsPresent } from 'framer-motion'
+import { AnimatePresence, motion, useIsPresent } from 'motion/react'
 
 const SURFACE_OFFSET_PX = 8
 
@@ -164,7 +196,7 @@ export function RowList({ rows, onDelete }: { rows: Row[]; onDelete: (row: Row) 
 }
 ```
 
-What this fixes: focus moves in the handler, before the exit starts, so it never lands on `<body>`. On confirm the trigger's row is about to disappear, so focus goes to the list heading instead. The leaving surface is `inert`, so a second click on Delete during the exit does nothing. `inert` is a boolean prop on React 19; on React 18 write `inert={isPresent ? undefined : ''}`. Initial focus goes to the least destructive action on mount through `autoFocus`, not after the entrance finishes.
+What this fixes: focus moves in the handler, before the exit starts, so it never lands on `<body>`. That only works when your own code owns the trap and the background's inertness and releases both in the same handler. Radix's trap pulls the focus back (use `onCloseAutoFocus` as above), and a native modal `<dialog>` keeps the trigger inert until `close()`. On confirm the trigger's row is about to disappear, so focus goes to the list heading instead. The leaving surface is `inert`, so a second click on Delete during the exit does nothing. `inert` is a boolean prop on React 19; on React 18 write `inert={isPresent ? undefined : ''}`. Initial focus goes to the least destructive action on mount through `autoFocus`, not after the entrance finishes.
 
 ## Layout animation
 
@@ -269,7 +301,7 @@ The LCP element must be visible on the first frame React paints:
 ## Long lists
 
 ```tsx
-import { motion, stagger, type Variants } from 'framer-motion'
+import { motion, stagger, type Variants } from 'motion/react'
 
 // Before: the 200th row waits 200 × STAGGER_STEP_S seconds
 const listVariants: Variants = { visible: { transition: { delayChildren: stagger(STAGGER_STEP_S) } } }
@@ -297,26 +329,38 @@ Keys must be ids. If the list's parent remounts on refetch or filter change, eve
 
 ## Loops that stop
 
+WCAG 2.2.2 Pause, Stop, Hide (level A) applies to anything that moves on its own for more than five seconds next to other content. Decoration is not exempt, and `prefers-reduced-motion` is not a pause mechanism, because it only helps users who know the OS setting exists and have turned it on. A loop either stops within five seconds (a finite `repeat`) or gets a visible control:
+
 ```tsx
 const ref = useRef<HTMLDivElement>(null)
 const inView = useInView(ref)
 const reduceMotion = useReducedMotion()
-const shouldLoop = inView && !reduceMotion
+const [paused, setPaused] = useState(false)
+const shouldLoop = inView && !reduceMotion && !paused
 
-<motion.div
-  ref={ref}
-  aria-hidden="true"
-  animate={shouldLoop ? { y: [0, -FLOAT_RANGE_PX, 0] } : { y: 0 }}
-  transition={shouldLoop ? { duration: FLOAT_CYCLE_S, repeat: Infinity, ease: 'easeInOut' } : { duration: 0 }}
-/>
+<>
+  <motion.div
+    ref={ref}
+    aria-hidden="true"
+    animate={shouldLoop ? { y: [0, -FLOAT_RANGE_PX, 0] } : { y: 0 }}
+    transition={shouldLoop ? { duration: FLOAT_CYCLE_S, repeat: Infinity, ease: 'easeInOut' } : { duration: 0 }}
+  />
+  {reduceMotion ? null : (
+    <button type="button" aria-pressed={paused} onClick={() => setPaused((value) => !value)}>
+      Pause animation
+    </button>
+  )}
+</>
 ```
+
+The button sits near the animation, keeps one label with `aria-pressed` for its state, and disappears only when nothing moves. Persist the choice (`localStorage`) if the loop appears on many pages. For an attention cue, a finite `repeat` whose total runs under five seconds needs no control.
 
 ## Bundle size
 
 ```tsx
 // src/motion/motion-provider.tsx
 import type { ReactNode } from 'react'
-import { LazyMotion, MotionConfig, domAnimation } from 'framer-motion'
+import { LazyMotion, MotionConfig, domAnimation } from 'motion/react'
 
 export function MotionProvider({ children }: { children: ReactNode }) {
   return (
@@ -335,11 +379,45 @@ export function FadeIn({ children }: { children: ReactNode }) {
 }
 ```
 
-`domAnimation` covers animations, variants, exit and tap/hover/focus gestures. Layout animation and drag need `domMax`; load it asynchronously where it is used: `features={() => import('./motion-features').then((mod) => mod.default)}` with `motion-features.ts` doing `export { domMax as default } from 'framer-motion'`. Check the production build output to confirm the layout features landed in a separate chunk rather than the entry.
+`domAnimation` covers animations, variants, exit and tap/hover/focus gestures. Layout animation and drag need `domMax`; load it asynchronously where it is used: `features={() => import('./motion-features').then((mod) => mod.default)}` with `motion-features.ts` doing `export { domMax as default } from 'motion/react'`. Check the production build output to confirm the layout features landed in a separate chunk rather than the entry.
 
 ## React Router route transitions
 
-React Router has no page-transition component and moves no focus, and in data mode `<ScrollRestoration>` scrolls when the location changes, not when your animation finishes. Everything below works with `react-router-dom` 7 in either declarative or data mode unless it says otherwise.
+React Router moves no focus, and in data mode `<ScrollRestoration>` scrolls when the location changes, not when your animation finishes. Everything below works with React Router 7 and 8 in either declarative or data mode unless it says otherwise. Import from `react-router`: v8 removed the `react-router-dom` package (`RouterProvider` now comes from `react-router/dom`), and in v7 it only re-exports `react-router`.
+
+### View transitions (data mode)
+
+For a page-level crossfade or a shared element between pages, let the browser do it. `<Link viewTransition>`, `<NavLink viewTransition>`, `<Form viewTransition>` and `navigate(to, { viewTransition: true })` wrap the router update in `document.startViewTransition()`. The browser snapshots the old page and animates the snapshot, so nothing old stays mounted: the problems the exit pattern below has to test for (old routes rendering new content, lost loader data, two titles, `<ScrollRestoration>` firing mid-exit) do not arise. The API is Baseline since October 2025 (Firefox 144); where it is missing, React Router navigates without animating. The `viewTransition` option is ignored in declarative mode.
+
+```tsx
+import { Link } from 'react-router'
+
+<Link to={`/invoices/${invoice.id}`} viewTransition>
+  {invoice.number}
+</Link>
+```
+
+```css
+:root {
+  --motion-page: 200ms;
+}
+
+::view-transition-group(root) {
+  animation-duration: var(--motion-page);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none;
+  }
+}
+```
+
+The browser does not apply reduced motion to view transitions; the media query is required. Pages do not take pointer input while the transition runs, so keep it short. Shared elements get a `view-transition-name` that must be unique on the page at snapshot time; in a list, set it only on the clicked item (`useViewTransitionState(href)` or `NavLink`'s `isTransitioning` render prop). Keep the `PageHeading` focus move from the `accessibility` skill: the new page's effects run before React Router lets the transition start animating, so focus lands on the new heading.
+
+React 19.3 made `<ViewTransition>` and `addTransitionType` stable. They animate updates made inside `startTransition`, a `<Suspense>` reveal or `useDeferredValue` (list reorders, tab content, a Suspense fallback giving way to data), and React skips the animation for updates that start from `popstate`, so Back does not animate. React calls `startViewTransition` itself and interrupts view transitions it did not start, so do not combine React Router's `viewTransition` with `<ViewTransition>` boundaries that change in the same navigation; give each navigation one owner. Motion 13.4 and later wrap React's component as `AnimateView` (`motion/react-animate-view`, React 19.3 or later) to drive those layers with Motion transitions. It does not read `MotionConfig reducedMotion`; it retimes the browser's view-transition animations, so the media query above leaves it nothing to animate.
 
 ### Enter-only (the default)
 
@@ -347,8 +425,8 @@ A fade on the incoming page, no exit. Nothing old stays mounted, so scroll resto
 
 ```tsx
 import { useEffect, useState, type ReactNode } from 'react'
-import { Outlet, useLocation } from 'react-router-dom'
-import { motion } from 'framer-motion'
+import { Outlet, useLocation } from 'react-router'
+import { motion } from 'motion/react'
 
 const PAGE_FADE_S = 0.2
 let firstPageRendered = false
@@ -396,8 +474,8 @@ Only when the design needs the old page to leave visibly. The exiting copy must 
 
 ```tsx
 import type { ReactNode } from 'react'
-import { Routes, useLocation, useOutlet } from 'react-router-dom'
-import { AnimatePresence, motion, useIsPresent } from 'framer-motion'
+import { Routes, useLocation, useOutlet } from 'react-router'
+import { AnimatePresence, motion, useIsPresent } from 'motion/react'
 
 const PAGE_ENTER_S = 0.15
 const PAGE_EXIT_S = 0.1
@@ -449,6 +527,7 @@ What still goes wrong with exits, and has to be tested:
 
 - `<ScrollRestoration>` acts when the location changes, which is at the start of the exit. The leaving page jumps to the top, and on Back the saved offset is applied against the old page's height. Press Back from a long page that was reached from another long page and check the landing position.
 - Inside the leaving page, `useLocation` and `useSearchParams` already reflect the new location. Anything rendered from them changes during the exit, and location effects run in a page that is going away.
+- In data mode, `useLoaderData`, `useRouteLoaderData`, `useActionData` and `useMatches` read the router's current state, and the router drops loader data for routes that no longer match. The leaving page re-renders with `undefined` and throws on `data.items`, so the nearest error boundary shows mid-exit; for the same route with a new param (`/invoices/1` to `/invoices/2`) it shows the next record's data while it fades out. `useParams()` keeps the old match, because it reads the captured element's route context. A page that may exit reads its data through TanStack Query keyed from `useParams()`, with the loader only priming the cache; otherwise keep exits off that route.
 - The new page mounts only after the exit, so a focus effect in the layout keyed on `pathname` runs too early. Move focus from the new page's heading on mount (the `accessibility` skill has the component) and call `focus({ preventScroll: true })` so it does not undo the restored scroll position.
 - Code-split routes (`lazy` in data mode, `React.lazy` in declarative mode) can delay the incoming page further. Check the transition on a throttled connection, where the gap between exit and enter is longest.
 
@@ -458,4 +537,4 @@ In declarative mode there is no `<ScrollRestoration>`; the browser does not rese
 
 Both packages ship the same code on the same version line: `motion/react` re-exports `framer-motion`, and `motion` depends on `framer-motion`. Motion's upgrade guide describes uninstalling `framer-motion`, installing `motion` and changing imports to `motion/react`. That is a rename. Do it only as its own change, and confirm the lockfile then resolves a single `framer-motion` (the one `motion` depends on). Staying on `framer-motion` is equally valid.
 
-Crossing a major version is the part that changes behavior, whichever package name is used. `AnimateSharedLayout` is long gone; use `layoutId` and `LayoutGroup`. v11 moved the post-mount render to a microtask, so tests that assert right after an update need to await a frame. v12 has no breaking changes in Motion for React. v13 dropped the optional `@emotion/is-prop-valid` dependency, so styled `motion` components (Styled Components, Emotion) may start passing props to the DOM that used to be filtered; pass `isValidProp` to `MotionConfig` to restore the filter. Keep behavior identical in the upgrade change and redesign motion separately.
+Crossing a major version is the part that changes behavior, whichever package name is used. `AnimateSharedLayout` is long gone; use `layoutId` and `LayoutGroup`. v11 moved the post-mount render to a microtask, so tests that assert right after an update need to await a frame. v12 has no breaking changes in Motion for React. v13 dropped the optional `@emotion/is-prop-valid` dependency, so styled `motion` components (Styled Components, Emotion) may start passing props to the DOM that used to be filtered; pass `isValidProp` to `MotionConfig` to restore the filter. v14 has no breaking changes for React, but `motion` and `framer-motion` now pin `framer-motion`, `motion-dom` and `motion-utils` to exact versions, so a direct `framer-motion` dependency at any other version always resolves a second copy. Keep behavior identical in the upgrade change and redesign motion separately.

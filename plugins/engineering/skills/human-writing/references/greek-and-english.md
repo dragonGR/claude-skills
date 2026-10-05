@@ -97,7 +97,7 @@ The claim about performance had no fact behind it and is gone.
 - The Greek question mark is «;». Do not change it to «?». (Unicode has a separate GREEK QUESTION MARK, U+037E, which normalizes to the ordinary semicolon, so most text simply uses «;».)
 - The ano teleia «·» is the Greek semicolon.
 - Quotation marks are «» in most Greek text; keep whatever the document uses.
-- Text in capitals drops the tonos («ΠΡΟΣΟΧΗ», not «ΠΡΟΣΟΧΉ») but keeps the diaeresis («ΠΡΩΤΕΪΝΗ»).
+- Text in capitals drops the tonos («ΠΡΟΣΟΧΗ», not «ΠΡΟΣΟΧΉ») and keeps the diaeresis («ΠΡΩΤΕΪΝΗ»). Where the tonos was what kept two vowels apart, capitals add a diaeresis the lowercase word lacks: «Μάιος» becomes «ΜΑΪΟΣ», «τσάι» becomes «ΤΣΑΪ». The disjunctive «ή» keeps its accent («Ή»). When code produces the capitals, plain uppercasing gets both rules wrong: in Node 26 `'Μάιος'.toUpperCase()` returns «ΜΆΙΟΣ», and Python's `'Μάιος'.upper()` does the same. Use `toLocaleUpperCase('el')` in JavaScript, or ICU's Greek-locale uppercasing elsewhere. CSS `text-transform: uppercase` depends on the browser and the page's `lang`, so check the rendered text.
 - Headings in sentence case. Title case is not a Greek convention at all.
 - Avoid the em dash in Greek technical prose too; commas, parentheses or the ano teleia do the job.
 - Formality: πληθυντικός ευγενείας (εσείς) with clients unless the thread already uses εσύ, and do not switch in the middle of a thread.

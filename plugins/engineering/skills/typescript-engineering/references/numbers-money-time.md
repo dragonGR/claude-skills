@@ -44,7 +44,7 @@ const Payout = z.strictObject({
 });
 ```
 
-For output, convert at the DTO boundary rather than patching `BigInt.prototype.toJSON`. The global patch changes behaviour for every library in the process and hides the places where nobody decided on a wire format.
+For output, convert at the DTO boundary rather than patching `BigInt.prototype.toJSON`. The global patch changes behavior for every library in the process and hides the places where nobody decided on a wire format.
 
 ```ts
 function toPayoutDto(p: PayoutRow): PayoutDto {
@@ -141,7 +141,7 @@ Consequences seen in production:
 
 ### Arithmetic and display
 
-- Adding `24 * 60 * 60 * 1000` ms is not "the next day" across a DST change. Calendar arithmetic in a zone needs a library that understands zones, or UTC-only calendar math where the business rule is defined in UTC.
+- Adding `24 * 60 * 60 * 1000` ms is not "the next day" across a DST change. Calendar arithmetic in a zone needs a library that understands zones, or UTC-only calendar math where the business rule is defined in UTC. `Temporal.ZonedDateTime` does zone-aware arithmetic natively in Node 26, Chrome 144+, Firefox 139+, Deno 2.7+ and Bun 1.4+, but not yet in Safari or Node 24, and some Linux distribution builds of Node 26 compile it out. Check `typeof Temporal` on the runtime you deploy to and load a polyfill where it is missing.
 - Format for users with `Intl.DateTimeFormat` and an explicit `timeZone`. Formatting without one uses the process's zone on the server and the user's zone in the browser, which is also a React hydration mismatch (frontend-engineering).
 - Durations and timeouts use `performance.now()` (monotonic). `Date.now()` jumps when the clock is corrected.
 - Comparing ISO strings lexicographically works only when both are UTC with the same precision and format. Compare parsed epoch values otherwise.

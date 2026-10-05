@@ -1,60 +1,12 @@
 # API surface and process lifecycle
 
-Read this when changing an API or event contract, adding a list endpoint, receiving webhooks, loading configuration, or handling shutdown and health probes.
+Read this when changing an API or event contract, receiving webhooks, loading configuration, or handling shutdown.
 
 Examples are TypeScript with Express, PostgreSQL and node-postgres. They assume Express 5, which forwards a rejected promise from an async handler to the error middleware; on Express 4 an async handler that throws produces an unhandled rejection and a hung request, so wrap handlers and call `next(err)`.
 
-## Keyset pagination
+## List endpoints
 
-```sql
-CREATE INDEX invoices_tenant_created_idx ON invoices (tenant_id, created_at DESC, id DESC);
-
-SELECT id, number, total_minor, created_at, created_at::text AS created_at_key
-  FROM invoices
- WHERE tenant_id = $1
-   AND (created_at, id) < ($2::timestamptz, $3::uuid)
- ORDER BY created_at DESC, id DESC
- LIMIT $4;
-```
-
-The first page runs the same query without the row comparison. Fetch `limit + 1` rows; if the extra row exists, there is a next page and the cursor is built from the last row you return.
-
-The sort key must be unique, so `id` is always the tie-breaker. The cursor carries `created_at_key`, the database's own text form, because PostgreSQL stores microseconds and a JavaScript `Date` keeps milliseconds; a cursor built from `Date` sits slightly before the real value and silently skips or repeats rows at page boundaries.
-
-```ts
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-export type InvoiceCursor = { createdAt: string; id: string };
-
-export function encodeCursor(cursor: InvoiceCursor): string {
-  return Buffer.from(JSON.stringify([cursor.createdAt, cursor.id]), 'utf8').toString('base64url');
-}
-
-export function decodeCursor(raw: string, maxLength: number): InvoiceCursor {
-  if (raw.length > maxLength) throw new BadRequestError('invalid cursor');
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
-  } catch {
-    throw new BadRequestError('invalid cursor');
-  }
-  if (
-    !Array.isArray(parsed) ||
-    parsed.length !== 2 ||
-    typeof parsed[0] !== 'string' ||
-    typeof parsed[1] !== 'string' ||
-    Number.isNaN(Date.parse(parsed[0])) ||
-    !UUID_PATTERN.test(parsed[1])
-  ) {
-    throw new BadRequestError('invalid cursor');
-  }
-  return { createdAt: parsed[0], id: parsed[1] };
-}
-```
-
-The cursor is untrusted input. It only says where to resume; the tenant filter, the caller's permissions and the page size are applied from the request context on every page, never read back from the cursor. Bound `limit` with a maximum from configuration.
-
-Offset pagination is acceptable for small, rarely changing lists (admin screens, settings) where a skipped or repeated row is harmless.
+Page with keyset pagination on a unique, immutable sort key, behind an opaque cursor that is validated as untrusted input and never carries the tenant or filters. The SQL, index and cursor encoding are in database-engineering's `patterns.md`.
 
 ## Compatibility
 
@@ -63,7 +15,7 @@ Treat HTTP APIs, event payloads, queue messages and webhook payloads you send as
 | Change | Safe for existing consumers |
 | --- | --- |
 | Add an optional response field | Yes, if consumers ignore unknown fields |
-| Add an optional request field whose absence keeps the old behaviour | Yes |
+| Add an optional request field whose absence keeps the old behavior | Yes |
 | Add a required request field | No |
 | Remove or rename a field | No |
 | Change a type, unit or format (number to string, cents to decimal, date format) | No |
@@ -103,7 +55,7 @@ app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
 });
 ```
 
-This follows RFC 9457 problem details, with the correlation id as an extension member. When the response has already started streaming, the handler hands the error to Express's default handler, which closes the connection; calling `res.status` at that point would throw. `publicDetail` is written for the client; the error's message, stack, SQL, constraint names and upstream bodies go to the log only. Authentication failures return the same response whether the account exists or not.
+This follows RFC 9457 problem details, with the correlation id as an extension member. When the response has already started streaming, the handler hands the error to Express's default handler, which closes the connection; writing a new response at that point would throw `ERR_HTTP_HEADERS_SENT`. `publicDetail` is written for the client; the error's message, stack, SQL, constraint names and upstream bodies go to the log only. Authentication failures return the same response whether the account exists or not.
 
 ## Receiving webhooks
 
@@ -197,58 +149,16 @@ Call `loadConfig(process.env)` before opening ports or pools and let a `ConfigEr
 
 ## Graceful shutdown
 
-```ts
-import type { Server } from 'node:http';
-import { setTimeout as delay } from 'node:timers/promises';
+The sequence is the same in every runtime:
 
-export function installShutdown(
-  server: Server,
-  deps: { markNotReady: () => void; stopWorkers: () => Promise<void>; pool: Pool },
-  cfg: { drainDelayMs: number; closeTimeoutMs: number },
-): void {
-  let started = false;
+1. On SIGTERM, fail readiness and keep serving. Kubernetes starts removing the pod from Service endpoints at the same moment it sends SIGTERM, and the change takes seconds to reach every proxy and load balancer, so new requests keep arriving.
+2. Wait a drain delay long enough for that propagation. A `preStop` sleep does the same job; it runs before SIGTERM and its time counts against the grace period.
+3. Stop accepting new connections.
+4. Let in-flight requests finish. Close idle keep-alive connections at once, and close each busy connection as soon as its response has been sent, with `Connection: close` on responses that start after shutdown began. A busy connection left alone stays open after its response until the server's keep-alive timeout, which behind a load balancer is often longer than the whole grace period.
+5. Stop workers and consumers: no new claims, and the current job finishes or is abandoned to its lease expiry.
+6. Close pools, flush logs, exit 0.
+7. A deadline a few seconds inside the grace period (`terminationGracePeriodSeconds`, default 30, minus any `preStop` time) exits non-zero with whatever is still open. SIGKILL follows the grace period and no handler sees it.
 
-  const shutdown = async (): Promise<void> => {
-    deps.markNotReady();
-    await delay(cfg.drainDelayMs);
-    const force = setTimeout(() => {
-      log.warn('shutdown deadline reached, closing remaining connections');
-      server.closeAllConnections();
-    }, cfg.closeTimeoutMs);
-    force.unref();
-    await Promise.all([
-      new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve()))),
-      deps.stopWorkers(),
-    ]);
-    clearTimeout(force);
-    await deps.pool.end();
-  };
+In Node, step 4 needs code of its own, and the obvious versions cut responses off. `server.close()` and `server.closeIdleConnections()` both treat a connection whose response has ended but is still being written to a slow client as idle and destroy it; on Node 26.10 a slow client reading a 64 MiB response got under 20 MB and a reset with either call. A connection left alone after its response instead waits out `keepAliveTimeout`, which on a server tuned for a load balancer is longer than the grace period. The working pattern sends `Connection: close` on responses that start after shutdown began, ends each socket on the response's `'finish'` event, and calls `close()` only once no response is mid-write. The tested routine is in nodejs-engineering.
 
-  for (const signal of ['SIGTERM', 'SIGINT'] as const) {
-    process.once(signal, () => {
-      if (started) return;
-      started = true;
-      log.info({ signal }, 'shutdown started');
-      shutdown().then(
-        () => process.exit(0),
-        (err: unknown) => {
-          log.error({ err }, 'shutdown failed');
-          process.exit(1);
-        },
-      );
-    });
-  }
-}
-```
-
-- Kubernetes removes the pod from Service endpoints at the same time as it starts graceful shutdown, and that removal takes time to reach every proxy and load balancer. Readiness goes false first and the process keeps serving through `drainDelayMs`, so requests routed during propagation still succeed. A `preStop` hook that waits achieves the same, and it runs before SIGTERM.
-- `server.close()` stops accepting and waits for in-flight requests. From Node 19 it also closes idle keep-alive connections; on Node 18.2 and later but before 19, call `server.closeIdleConnections()` after it or idle sockets hold the close open. `closeAllConnections()` is the forced path at the deadline.
-- `stopWorkers` aborts the workers' `shuttingDown` signal and waits for their loops to return (jobs-and-state-machines.md). A job still running at the deadline is abandoned, and its lease expiry hands it to another worker.
-- `drainDelayMs + closeTimeoutMs` plus pool shutdown must fit inside `terminationGracePeriodSeconds` (default 30), and time spent in `preStop` counts against the same period. After that comes SIGKILL, which no handler sees.
-- The signal has to reach the process. A shell-form Docker `CMD` or `ENTRYPOINT` runs under `/bin/sh -c`, which does not pass signals on; use exec form, or `exec` the process from a wrapper script. A process running as PID 1 with no SIGTERM handler ignores SIGTERM.
-
-## Health probes
-
-- Liveness: the process can make progress (the event loop answers). No database or downstream checks, since a shared dependency failing would restart every pod at once.
-- Readiness: false during startup until config, pools and caches are ready, and false from the start of shutdown. Checking a hard dependency here is reasonable only if routing traffic to other pods would actually help; when every pod shares the dependency, all of them go unready together and the service returns nothing at all instead of useful errors.
-- Startup: a separate startup probe covers slow boots, so liveness can stay strict.
+Workers stop through the `shuttingDown` signal in jobs-and-state-machines.md; a job still running at the deadline is abandoned, and its lease expiry hands it to another worker. Signal delivery to PID 1, exec-form `CMD` and probe configuration are in infrastructure-ops.

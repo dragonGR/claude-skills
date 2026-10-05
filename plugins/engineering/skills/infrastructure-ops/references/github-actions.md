@@ -7,10 +7,10 @@ Action references below are written `owner/action@<commit-sha> # <tag>`. The slo
 ## Pinning an action
 
 ```sh
-git ls-remote --tags https://github.com/actions/checkout 'refs/tags/v5*'
+git ls-remote --tags --sort=-v:refname https://github.com/actions/checkout | head -n 6
 ```
 
-For an annotated tag the output has two lines, `refs/tags/vX.Y.Z` (the tag object) and `refs/tags/vX.Y.Z^{}` (the commit). Pin the `^{}` commit. Because the SHA came from a tag in the upstream repository, it cannot be a commit that exists only in a fork. Write the tag in a trailing comment so update bots and reviewers can read it, and review the upstream diff when a bot proposes a bump. Workflow linters such as zizmor flag unpinned references, SHAs that match no tag, and impostor commits.
+Take the newest release tag. For an annotated tag the output has two lines, `refs/tags/vX.Y.Z` (the tag object) and `refs/tags/vX.Y.Z^{}` (the commit); pin the `^{}` commit. A lightweight tag has one line, and that SHA is already the commit. Because the SHA came from a tag in the upstream repository, it cannot be a commit that exists only in a fork. Write the tag in a trailing comment so update bots and reviewers can read it, and review the upstream diff when a bot proposes a bump. Workflow linters such as zizmor flag unpinned references, SHAs that match no tag, and impostor commits.
 
 Container images used by jobs (`container:`, `services:`, `uses: docker://...`) get pinned by `@sha256:` digest for the same reason.
 
@@ -29,7 +29,7 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     steps:
@@ -61,7 +61,7 @@ permissions: {}
 jobs:
   comment:
     if: github.event.workflow_run.event == 'pull_request'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       actions: read
       pull-requests: write
@@ -108,7 +108,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       id-token: write
@@ -132,7 +132,7 @@ jobs:
 
   deploy:
     needs: build
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     environment: production
     permissions:
       contents: read
@@ -155,6 +155,7 @@ jobs:
 
 - `permissions: {}` at the top, and each job lists what it uses. `id-token: write` only lets the job request an OIDC token; it grants nothing else.
 - The deploy job references the `production` environment, which has required reviewers, self-review prevented, and deployment limited to `main`. The deploy role's trust policy accepts only that environment's `sub`.
+- The `main` branch rule does not keep out `pull_request_target` or `workflow_run` jobs, because both run on the default branch (for `pull_request_target`, GitHub has evaluated environment rules against the default branch since December 2025). Required reviewers are the gate that holds against a privileged PR-triggered job.
 - The build role can push images and nothing else; the deploy role can update the cluster and nothing else.
 - The image is deployed by the digest the build produced, so a retag cannot change what ships.
 - `${{ github.sha }}` and `${{ vars.* }}` are not attacker-controlled; `vars` are set by repository admins.
@@ -185,6 +186,8 @@ jobs:
 
 Use `StringEquals` on `sub` for deploy roles. `StringLike` with `repo:<org>/<repo>:*` accepts every branch, tag, environment and pull request run in the repository. A policy that checks only `aud` accepts tokens from any repository on GitHub, since every workflow that requests a token for AWS asks for the same `sts.amazonaws.com` audience. When a job references an environment, the token's `sub` is the environment form, not the branch form, so a trust policy written for `ref:refs/heads/main` will reject the environment-scoped job; copy the exact `sub` from a real token or the provider docs when setting this up.
 
+The subject itself comes in two forms. Repositories created, renamed or transferred after 2026-07-15, and older ones that opted in through the OIDC settings, get GitHub's immutable form `repo:OWNER@OWNER-ID/REPO@REPO-ID:...`, for example `repo:<org>@<org-id>/<repo>@<repo-id>:environment:production`. A condition written in the older `repo:<org>/<repo>:...` form rejects every token from those repositories, and the tempting fix of widening it to `StringLike` is the bug described above. Check which form the repository emits (GitHub's OIDC preview endpoint shows the subject prefix, or decode a real token) before writing the condition. The ids are the point of the format: once a policy names them, another repository that later takes over the owner or repository name cannot match it.
+
 ## Expression injection
 
 Before:
@@ -212,7 +215,7 @@ Safe to interpolate: `github.sha`, `github.run_id`, `github.repository`, numeric
 
 ## Auditing a repository's workflows
 
-1. List every trigger. For `pull_request_target`, `workflow_run` and `issue_comment`, find what they check out (`ref:` inputs pointing at `head.sha`, `head.ref` or `refs/pull/*/merge`) and whether anything from the PR is executed afterwards: install scripts, builds, tests, local actions (`uses: ./...`), or scripts from a downloaded artifact.
+1. List every trigger. For `pull_request_target`, `workflow_run` and `issue_comment`, find what they check out (`ref:` inputs pointing at `head.sha`, `head.ref` or `refs/pull/*/merge`) and whether anything from the PR is executed afterwards: install scripts, builds, tests, local actions (`uses: ./...`), or scripts from a downloaded artifact. actions/checkout v7, and the v6.1.0, v5.1.0 and v4.4.0 backports, refuse to check out fork PR code under `pull_request_target` and `workflow_run`, so flag every `allow-unsafe-pr-checkout: true`, and every `git fetch` of `pull/*/head`, `gh pr checkout` or API download of PR files in these workflows, since those bypass the guard.
 2. Search `run:` and `script:` blocks for `${{ github.event.`, `${{ github.head_ref`, and `${{ steps.*.outputs.* }}` whose source is untrusted.
 3. Search `uses:` for anything not followed by a 40-character hex SHA, and container images without `@sha256:`.
 4. Check for a top-level `permissions:` block and per-job grants. Flag `write-all`, missing blocks, and `secrets: inherit`.

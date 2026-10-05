@@ -9,7 +9,7 @@
     {
       "name": "engineering",
       "source": "./plugins/engineering",
-      "description": "Security, smart contracts, backend, database, infrastructure, Node.js, language, frontend, testing, performance and writing skills written for production work."
+      "description": "Security, backend, database, infrastructure, Git, Node.js, TypeScript, Python, Rust, Solidity, React frontend, motion, accessibility, SEO, testing, performance, AI-code audit and writing skills for production work."
     }
   ]
 }

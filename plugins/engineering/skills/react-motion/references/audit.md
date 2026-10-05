@@ -24,7 +24,8 @@ Run these with the search tool across `src`/`app`/`components`. They are ripgrep
 - `useMotionValueEvent|addEventListener\(['"]scroll` followed by `set[A-Z]`: state per frame.
 - `window\.|innerWidth|innerHeight` inside `initial=`: a size captured once that goes stale on resize.
 - `initial=\{\{\s*opacity:\s*0` in hero or above-the-fold components: LCP content hidden for the length of the entrance.
-- `repeat:\s*Infinity|repeat:\s*-1|infinite`: loops without view or preference gating.
+- `repeat:\s*Infinity|repeat:\s*-1|infinite`: loops without view or preference gating, or running past five seconds with no pause control (WCAG 2.2.2, A).
+- `viewTransition|startViewTransition|<ViewTransition|AnimateView`: check for a reduced-motion rule on `::view-transition-*` and for two owners of one navigation.
 - `will-change` in CSS or `willChange` in styles: permanent layer promotion.
 - `stagger\(|staggerChildren`: unbounded stagger over data-driven lists.
 - `useReducedMotion|prefers-reduced-motion|matchMedia\(`: coverage of the preference; absence is the finding.

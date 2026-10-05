@@ -56,7 +56,7 @@ import os
 import psycopg
 import pytest
 from psycopg import sql
-from testcontainers.postgres import PostgresContainer
+from testcontainers.community.postgres import PostgresContainer  # testcontainers 4.15+; older releases: testcontainers.postgres
 
 from app.db.migrate import run_migrations
 

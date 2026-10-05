@@ -54,7 +54,7 @@ fn read_limited(reader: impl Read, limit: u64) -> Result<Vec<u8>, UploadError> {
 
 Reading one byte past the limit distinguishes "exactly at the limit" from "over it". Tokio's `AsyncReadExt::take` works the same way. In axum, `DefaultBodyLimit` (2 MB unless changed) covers the `Bytes`, `String`, `Json` and `Form` extractors; a handler that consumes the body stream itself needs its own limit, for example `http_body_util::Limited`. Decompression needs a limit on the output, not the input: wrap the decoder in `take` as well, since a small gzip body can expand by orders of magnitude.
 
-Binary formats that read length prefixes from the input (bincode and similar) need their size limit configured; the default may be unlimited.
+Binary formats that read length prefixes from the input (bincode and similar) need their size limit configured; the default may be unlimited. bincode itself is unmaintained (RUSTSEC-2025-0141, which `cargo deny check advisories` reports), and its 3.0.0 release contains only a `compile_error!`; new code should pick a maintained format.
 
 ## Serde at the boundary
 
@@ -226,17 +226,14 @@ fn upload_path(root: &Path, name: &str) -> Result<PathBuf, PathError> {
 
 ## Regular expressions
 
-The `regex` crate guarantees search time proportional to pattern size times input size, so patterns with nested quantifiers are not a ReDoS risk when the pattern is fixed and only the input is untrusted. Do not report them. What still needs care:
+Fixed `regex` patterns on untrusted input are not a ReDoS finding (see SKILL.md). What still needs care:
 
 - A pattern supplied by a user can compile to a very large automaton (counted repetitions multiply). Build it with `RegexBuilder::size_limit` and cap the pattern length.
-- `fancy-regex` supports backreferences and lookaround through backtracking, so its worst case is exponential; do not run it with untrusted patterns or on large untrusted input without a limit.
 - Compile fixed patterns once (`LazyLock<Regex>` or a struct field), not per call.
 
 ## Hash maps keyed by input
 
-std `HashMap` and `HashSet` use a randomly seeded SipHash, which resists collision flooding; do not replace them with FxHash or another hasher without a random per-process key when keys come from clients. Fast unkeyed hashers are fine for keys the process generates itself.
-
-Iteration order differs between processes and between maps. Anything that serializes a map and then signs, hashes, caches or compares the bytes needs a canonical order: `BTreeMap`, sorting the entries first, or `IndexMap` for insertion order.
+SKILL.md covers HashDoS and iteration order. Fast unkeyed hashers are fine for keys the process generates itself.
 
 ## Secrets
 

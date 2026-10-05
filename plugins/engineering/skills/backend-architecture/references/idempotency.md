@@ -236,11 +236,13 @@ RETURNING id, amount_minor, currency;
 
 The amount and currency come from the order row, never from the request. `payment_failed` is allowed so the customer can try again with a new key after a decline. The second branch lets a takeover of the same key re-enter; a different key finds `payment_pending` with another `payment_key` and gets zero rows. `finishPayment` is the same pattern from `payment_pending` (with the matching `payment_key`) to `paid` or `payment_failed`.
 
-On an unknown outcome the key stays `in_progress` and the order stays `payment_pending`. The client's retry after `Retry-After` takes the lease over and calls the provider again with the same `downstream_key`, which returns the original result instead of charging twice. If the client never returns, the reconciler below finishes the row.
+On an unknown outcome the key stays `in_progress`, the order stays `payment_pending`, and the lease stays in force, which gives a provider still working on the timed-out request time to finish. A retry inside the lease gets 409. The client's retry after `Retry-After` takes the lease over and calls the provider again with the same `downstream_key`. After a timeout or a lost response that returns the original result instead of charging twice; after an error the provider stored under the key it returns the same error (next section). If the client never returns, the reconciler below finishes the row.
 
 ## Classifying the provider's answer
 
 Only a definitive answer ends the attempt. A card decline, a validation rejection or an explicit "not found" is definitive. A timeout, a connection reset after the request was written, a 500, 502 or 504, and a response body you cannot parse are all unknown. A 429 or 503 is not processed only where the provider documents it that way. Put this classification in one function per provider and test it against recorded responses.
+
+A keyed retry recovers a lost response; it does not get past an error the provider stored under the key. Stripe saves the status and body of every request that began executing, 500s included, and replays them for the same key, so after a Stripe 500 every takeover sees the same 500 and the client loops on 503. Treat that as a reconciliation case: enqueue the reconcile for the key at once and resolve it by lookup (your own reference in the object's `metadata`, or the webhook Stripe sends for objects its own incident reconciliation creates). Never retry it under a new key, which Stripe warns may duplicate the side effect.
 
 ## Reconciler
 

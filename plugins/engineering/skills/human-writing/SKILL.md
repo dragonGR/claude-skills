@@ -21,20 +21,27 @@ Write the way a senior engineer writes to a colleague they respect: the point fi
 | Summarize | Fidelity and stated uncertainty | Length and emphasis |
 | De-AI pass | Meaning, claims, recognizable voice | Machine habits at every level |
 
-When the user supplies their own prose, its voice is the style guide. The owner of this plugin is Greek and writes English and Greek; natural non-native phrasing is a voice to keep, and only errors that change meaning or read as mistakes get fixed (`references/greek-and-english.md`).
+When the user supplies their own prose, its voice is the style guide. The owner of this plugin is Greek and writes English and Greek. Natural non-native phrasing is a voice to keep; only errors that change meaning or read as mistakes get fixed. English written by Greek speakers, and Greek itself, are covered in [references/greek-and-english.md](references/greek-and-english.md).
 
 ## Failures that cost the most
 
 These happen while rewriting and cleaning up. They cost more than any stylistic tell because they change what the text says.
 
-- **Fact drift.** A number, unit, version, date, timezone, name or quoted string changes. "Up to 18%" becomes "18%", "p99 of 1,840 ms" becomes "about two seconds", "14:05 UTC" loses its timezone, "PostgreSQL 15" becomes "PostgreSQL". Locale traps too: Greek "1.500" is fifteen hundred and an English reader sees one and a half. Copy numbers and identifiers character for character, and diff them against the source afterwards.
-- **Certainty drift.** Hedges that carried real uncertainty get cut along with the filler, or a tentative claim hardens. "We believe the cache caused it" becomes "The cache caused it"; "should" becomes "will"; "mitigated" becomes "resolved". Cut stacked hedges; keep the one that states what is unknown.
-- **Term drift.** A term of art is swapped for a friendlier word that means something else: "idempotent" for "safe", "at-least-once" for "reliable", "p99" for "slowest requests", "Keycloak realm" for "area", "deprecated" for "removed". Whatever term the source uses, the rewrite uses too, every time.
-- **Invented texture.** Anecdotes, customer quotes, round numbers, dates, names or "users love it" added so the text feels lived-in. Never add a fact the source does not contain. If the text needs a number you do not have, tell the user or write "not measured".
-- **Word swap, same skeleton.** "Leverage" becomes "use" while the triple, the trailing "-ing" clause, the matched paragraphs and the closing summary survive. It still reads as generated. Repair structure first, words last.
-- **Over-correction.** Removing a flagged word in its technical sense (API key, robust regression, `unlock()`, landscape orientation, privilege elevation), forcing a real list into prose, americanizing a British document, replacing Greek punctuation, or polishing the author's plain English into corporate idiom.
-- **Second-generation slop.** The voice a model adopts when told to sound human: "Here's the deal:", "Short version:", "Honestly,", one-word fragments, jokes in an incident report. The target is plain, not casual.
-- **Chat wrapper.** "Here's a more natural version:" before the text, three alternatives nobody asked for, a list of every change made. Deliver the text. Add a note only for something the user must act on, such as a contradiction in the source or a fact you could not confirm. Never explain stylistic edits (words removed, heading case changed, adjectives dropped); the user can see them.
+**Fact drift.** A number, unit, version, date, timezone, name or quoted string changes. "Up to 18%" becomes "18%", "p99 of 1,840 ms" becomes "about two seconds", "14:05 UTC" loses its timezone, "PostgreSQL 15" becomes "PostgreSQL". Locale traps too: Greek "1.500" is fifteen hundred and an English reader sees one and a half. Copy numbers and identifiers character for character, and diff them against the source afterwards.
+
+**Certainty drift.** Hedges that carried real uncertainty get cut along with the filler, or a tentative claim hardens. "We believe the cache caused it" becomes "The cache caused it"; "should" becomes "will"; "mitigated" becomes "resolved". Cut stacked hedges; keep the one that states what is unknown.
+
+**Term drift.** A term of art is swapped for a friendlier word that means something else: "idempotent" for "safe", "at-least-once" for "reliable", "p99" for "slowest requests", "Keycloak realm" for "area", "deprecated" for "removed". Whatever term the source uses, the rewrite uses too, every time.
+
+**Invented texture.** Anecdotes, customer quotes, round numbers, dates, names or "users love it" added so the text feels lived-in. Never add a fact the source does not contain. If the text needs a number you do not have, tell the user or write "not measured".
+
+**Word swap, same skeleton.** "Leverage" becomes "use" while the triple, the trailing "-ing" clause, the matched paragraphs and the closing summary survive. It still reads as generated. Repair structure first, words last.
+
+**Over-correction.** Removing a flagged word in its technical sense (API key, robust regression, `unlock()`, landscape orientation, privilege elevation), forcing a real list into prose, americanizing a British document, replacing Greek punctuation, or polishing the author's plain English into corporate idiom.
+
+**Second-generation slop.** The voice a model adopts when told to sound human: "Here's the deal:", "Short version:", "Honestly,", one-word fragments, jokes in an incident report. The target is plain, not casual.
+
+**Chat wrapper.** "Here's a more natural version:" before the text, three alternatives nobody asked for, a list of every change made. Deliver the text. Add a note only for something the user must act on, such as a contradiction in the source or a fact you could not confirm. Never explain stylistic edits (words removed, heading case changed, adjectives dropped); the user can see them.
 
 ## Machine-prose tells
 
@@ -42,44 +49,69 @@ One instance proves nothing. The same move repeated across a passage is a voice,
 
 ### Document
 
-- **Announced structure, closing summary.** "In this guide we'll explore X, Y and Z" at the top; "In conclusion" or "Key takeaways" restating the middle at the bottom. Cut both. End on the last useful fact, the decision or the next step.
-- **Title Case Headings.** Use sentence case: first word and proper nouns only. Follow the repository's convention if it has a different one.
-- **Bold-label bullets.** Every bullet opens with `**Label:**`. Drop the labels, make a table if it is a real mapping, or write prose if the bullets were an argument.
-- **Emoji headers and markers.** 🚀 Features, ✅, 💡 Tip, ⚠️. Remove them. Use the doc system's admonition if a warning must stand out.
-- **Headings and bullets for everything.** A heading every two sentences, four heading levels in a one-page doc, reasoning chopped into bullets so every "because" disappears. Reasoning goes in paragraphs; lists are for parallel items people scan.
-- **Boilerplate sections.** "Why this matters", "Benefits", "Challenges and future outlook", an FAQ that repeats the body. Keep a section only if deleting it loses a fact.
-- **Fake specificity.** "Up to 10x faster", "99.9% uptime", "trusted by thousands", "studies show", none of it in the source. Only numbers from the source, or from a measurement you describe.
-- **Artifacts.** `[Your Name]`, `[insert link]`, "As of my last update", citation debris (`oaicite`, `contentReference`, `turn0search0`), a stray "```markdown" fence around the whole answer.
+**Announced structure, closing summary.** "In this guide we'll explore X, Y and Z" at the top; "In conclusion" or "Key takeaways" restating the middle at the bottom. Cut both. End on the last useful fact, the decision or the next step.
+
+**Title Case Headings.** Use sentence case: first word and proper nouns only. Follow the repository's convention if it has a different one.
+
+**Bold-label bullets.** Every bullet opens with `**Label:**`. Drop the labels, make a table if it is a real mapping, or write prose if the bullets were an argument. A catalogue of named items, like this one, can open each paragraph with its name in bold; the tell is a label stuck on every ordinary point.
+
+**Emoji headers and markers.** 🚀 Features, ✅, 💡 Tip, ⚠️. Remove them. Use the doc system's admonition if a warning must stand out.
+
+**Headings and bullets for everything.** A heading every two sentences, four heading levels in a one-page doc, reasoning chopped into bullets so every "because" disappears. Reasoning goes in paragraphs; lists are for parallel items people scan.
+
+**Boilerplate sections.** "Why this matters", "Benefits", "Challenges and future outlook", an FAQ that repeats the body. Keep a section only if deleting it loses a fact.
+
+**Fake specificity.** "Up to 10x faster", "99.9% uptime", "trusted by thousands", "studies show", none of it in the source. Only numbers from the source, or from a measurement you describe.
+
+**Artifacts.** `[Your Name]`, `[insert link]`, "As of my last update", citation debris (`oaicite`, `contentReference`, `turn0search0`), a stray "```markdown" fence around the whole answer.
 
 ### Paragraph
 
-- **Symmetric paragraphs.** Every paragraph three or four sentences: claim, support, support, significance. Let content set the length; a one-sentence paragraph is fine when that is the whole thought.
-- **Significance closers.** "This makes X an excellent choice for teams of any size." Cut it. A real consequence belongs in the paragraph as a fact with its mechanism.
-- **One fact smeared across three sentences.** "Performance matters. That's why we reworked the query. It is now much faster." becomes one sentence carrying the numbers from the source.
-- **Heading echo.** "## Installation" followed by "This section explains how to install X." Start with the first step.
+**Symmetric paragraphs.** Every paragraph three or four sentences: claim, support, support, significance. Let content set the length; a one-sentence paragraph is fine when that is the whole thought.
+
+**Significance closers.** "This makes X an excellent choice for teams of any size." Cut it. A real consequence belongs in the paragraph as a fact with its mechanism.
+
+**One fact smeared across three sentences.** "Performance matters. That's why we reworked the query. It is now much faster." becomes one sentence carrying the numbers from the source.
+
+**Heading echo.** "## Installation" followed by "This section explains how to install X." Start with the first step.
 
 ### Sentence
 
-- **Em dashes.** Any em dash, and any en dash, " - " or " -- " doing the same job. Replace by function: commas for an aside inside the sentence, a colon when what follows explains or lists, parentheses for an aside the sentence reads fine without, a full stop when both halves are sentences. Swapping the character for a hyphen keeps the tell.
-- **Contrast templates.** "Not only X but also Y", "not just X, but Y", "it's not about X, it's about Y", "X isn't just a Y. It's a Z.", "No X. No Y. Just Z." Say what the thing is. A real contrast gets stated once: "The limit is per API key, not per IP."
-- **Reflexive triples.** "Fast, reliable and scalable." Three because three sounds finished. Keep the items that carry distinct information; two or four is fine.
-- **Participial tails.** ", ensuring…", ", highlighting…", ", underscoring…", ", making it…", ", allowing teams to…", ", paving the way for…". A benefit attached with no mechanism. Cut it, or make it a claim: "keyed by tenant, ensuring isolation" becomes "the cache key includes the tenant ID, so one tenant cannot read another's entries."
-- **Copula avoidance.** "Serves as", "stands as", "acts as", "represents", "boasts", "features". Write "is" or "has".
-- **Self-answered questions and colon reveals.** "The result? A smaller bundle." "Here's the thing:" "The catch:" State it.
-- **Punchline fragments.** "Simple." "That's it." "Enter Redis." A full sentence or nothing.
-- **False ranges.** "From startups to enterprises", "whether you're a beginner or an expert". Say who it is for.
-- **Synonym rotation.** The tool, the platform, the solution: one thing, three names. In technical text a new noun implies a new thing. Pick one name.
-- **Actor hidden by passive.** "An issue was experienced", "the table was dropped". Say what did it: "a cleanup job dropped the table." Passive is fine when the actor is unknown or irrelevant.
+**Em dashes.** Any em dash, and any en dash, " - " or " -- " doing the same job. Replace by function: commas for an aside inside the sentence, a colon when what follows explains or lists, parentheses for an aside the sentence reads fine without, a full stop when both halves are sentences. Swapping the character for a hyphen keeps the tell.
+
+**Contrast templates.** "Not only X but also Y", "not just X, but Y", "it's not about X, it's about Y", "X isn't just a Y. It's a Z.", "No X. No Y. Just Z." Say what the thing is. A real contrast gets stated once: "The limit is per API key, not per IP."
+
+**Reflexive triples.** "Fast, reliable and scalable." Three because three sounds finished. Keep the items that carry distinct information; two or four is fine.
+
+**Participial tails.** ", ensuring…", ", highlighting…", ", underscoring…", ", making it…", ", allowing teams to…", ", paving the way for…". A benefit attached with no mechanism. Cut it, or make it a claim: "keyed by tenant, ensuring isolation" becomes "the cache key includes the tenant ID, so one tenant cannot read another's entries."
+
+**Copula avoidance.** "Serves as", "stands as", "acts as", "represents", "boasts", "features". Write "is" or "has".
+
+**Self-answered questions and colon reveals.** "The result? A smaller bundle." "Here's the thing:" "The catch:" State it.
+
+**Punchline fragments.** "Simple." "That's it." "Enter Redis." A full sentence or nothing.
+
+**False ranges.** "From startups to enterprises", "whether you're a beginner or an expert". Say who it is for.
+
+**Synonym rotation.** The tool, the platform, the solution: one thing, three names. In technical text a new noun implies a new thing. Pick one name.
+
+**Actor hidden by passive.** "An issue was experienced", "the table was dropped". Say what did it: "a cleanup job dropped the table." Passive is fine when the actor is unknown or irrelevant.
 
 ### Phrase and word
 
-- **Signposting.** "It's important to note that", "It's worth mentioning", "In today's fast-paced world", "Let's dive in", "When it comes to", "As mentioned above". Delete; start with the fact.
-- **Empty connectives.** "Moreover", "Furthermore", "Additionally", "Ultimately", "Overall" opening sentences. Use the real relation (because, so, but) or nothing.
-- **Stacked hedges.** "Could potentially", "may possibly", "it could be argued that this might". One hedge, on the claim it qualifies, with the reason if you know it.
-- **Intensifiers.** Truly, incredibly, extremely, highly, deeply, remarkably. Cut, or give the number.
-- **Sycophancy.** "Great question!", "You're absolutely right", "What a thoughtful approach", praising a draft before editing it. Start with the answer.
-- **Stock email lines.** "I hope this email finds you well", "I wanted to reach out", "Please don't hesitate to contact me", "Thank you for your patience and understanding", "We apologize for any inconvenience". Open with the reason for writing; apologize once, for the specific thing.
-- **Slop vocabulary.** Replace with the plain word, or better, with the fact the word was standing in for:
+**Signposting.** "It's important to note that", "It's worth mentioning", "In today's fast-paced world", "Let's dive in", "When it comes to", "As mentioned above". Delete; start with the fact.
+
+**Empty connectives.** "Moreover", "Furthermore", "Additionally", "Ultimately", "Overall" opening sentences. Use the real relation (because, so, but) or nothing.
+
+**Stacked hedges.** "Could potentially", "may possibly", "it could be argued that this might". One hedge, on the claim it qualifies, with the reason if you know it.
+
+**Intensifiers.** Truly, incredibly, extremely, highly, deeply, remarkably. Cut, or give the number.
+
+**Sycophancy.** "Great question!", "You're absolutely right", "What a thoughtful approach", praising a draft before editing it. Start with the answer.
+
+**Stock email lines.** "I hope this email finds you well", "I wanted to reach out", "Please don't hesitate to contact me", "Thank you for your patience and understanding", "We apologize for any inconvenience". Open with the reason for writing; apologize once, for the specific thing.
+
+**Slop vocabulary.** Replace with the plain word, or better, with the fact the word was standing in for:
 
 | Tell | Write instead |
 | --- | --- |
@@ -102,7 +134,7 @@ One instance proves nothing. The same move repeated across a passage is a voice,
 | myriad, plethora, a wide array of | many, or the number |
 | cutting-edge, game-changer, revolutionize | the version, or the effect with numbers |
 
-The longer list, with the technical senses in which each word is correct and should stay, is in `references/tells.md`.
+The longer list, with the technical senses in which each word is correct and should stay, is in [references/tells.md](references/tells.md).
 
 ## Detail without padding
 
@@ -139,7 +171,7 @@ Run this on every piece of prose you produce, including replies to the user, and
 5. Words: check each word from the vocabulary table. Replace it, or confirm it is the technical term in context.
 6. Read top to bottom as the intended reader. Every sentence passes the deletion test, and sentence lengths vary with the thought.
 7. Check the repairs did not add second-generation slop or a chat wrapper.
-8. If the draft is in a file, run the Grep patterns at the end of `references/tells.md` and review each hit.
+8. If the draft is in a file, run the Grep patterns at the end of [references/tells.md](references/tells.md) and review each hit.
 
 ## Review checklist
 
@@ -153,15 +185,15 @@ Run this on every piece of prose you produce, including replies to the user, and
 - Does the text end on a fact, decision or next step rather than a summary or an offer to help?
 - Does each flagged word that remains have its technical meaning in context?
 - Is the author's voice still recognizable, including non-native phrasing that reads correctly?
-- Does the text contain what its genre requires (see `references/genres.md`)?
+- Does the text contain what its genre requires (see [references/genres.md](references/genres.md))?
 - Is the delivered text free of a preamble, alternatives and change lists nobody asked for?
 
 This is a quality pass, not an authorship guarantee. Never claim text will pass an AI detector or is "human-written".
 
 ## References
 
-- `references/tells.md`: read for an explicit de-AI pass or a review of someone else's text; the full word list with technical exceptions, a phrase bank, sentence repairs, second-generation slop and Grep patterns for files.
-- `references/genres.md`: read when writing or rewriting a README, commit message, PR description, incident report, API reference, client email, release notes, security advisory or UI copy.
-- `references/rewrites.md`: read when you want a full worked rewrite to calibrate against, including an over-corrected draft.
-- `references/greek-and-english.md`: read when editing English by a Greek speaker, writing to Greek clients, or writing Greek.
+- [references/tells.md](references/tells.md): read for an explicit de-AI pass or a review of someone else's text; the full word list with technical exceptions, a phrase bank, sentence repairs, second-generation slop and Grep patterns for files.
+- [references/genres.md](references/genres.md): read when writing or rewriting a README, commit message, PR description, incident report, API reference, client email, release notes, security advisory or UI copy.
+- [references/rewrites.md](references/rewrites.md): read when you want a full worked rewrite to calibrate against, including an over-corrected draft.
+- [references/greek-and-english.md](references/greek-and-english.md): read when editing English by a Greek speaker, writing to Greek clients, or writing Greek.
 - Related skills: `security-engineering` for the substance of an advisory, `accessibility` for UI copy in context.

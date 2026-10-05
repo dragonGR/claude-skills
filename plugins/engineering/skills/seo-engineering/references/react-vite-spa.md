@@ -1,3 +1,5 @@
+# React + Vite SPAs and crawlers
+
 Read this when the site is a React + Vite single-page app (React Router in declarative or data mode, built to static files) and the change touches what crawlers or link-preview bots receive: `index.html`, per-route head tags, prerendering, status codes from the host, sitemaps or deploy caching.
 
 ## What each client receives
@@ -54,7 +56,7 @@ function requireOrigin(value: string | undefined, name: string): string {
 }
 
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), '')
+  const env = loadEnv(mode, process.cwd(), 'VITE_')
   requireOrigin(env.VITE_SITE_ORIGIN, 'VITE_SITE_ORIGIN')
   return { plugins: [react()] }
 })
@@ -76,7 +78,7 @@ React 19 hoists `<title>`, `<meta>` and `<link>` rendered anywhere in the tree i
 
 ### react-helmet-async 3
 
-On React 19, v3 renders a native element for each tag and lets React hoist it. Reading its `React19Dispatcher` source: each `<Helmet>` instance renders its own tags with no merging across instances, so the v1/v2 behaviour where the innermost `<Helmet>` replaced an outer title or canonical is gone. A layout `<Helmet>` with a default title and canonical plus a page `<Helmet>` now produce two of each. `titleTemplate` and `defaultTitle` still apply within one instance. `htmlAttributes` and `bodyAttributes` are still applied by direct DOM writes. The `HelmetProvider` `context` object "will not be populated with helmet state on React 19", so a prerender script that reads `helmetContext.helmet.title.toString()` gets nothing.
+On React 19, v3 renders a native element for each tag and lets React hoist it. Reading its `React19Dispatcher` source: each `<Helmet>` instance renders its own tags with no merging across instances, so the v1/v2 behavior where the innermost `<Helmet>` replaced an outer title or canonical is gone. A layout `<Helmet>` with a default title and canonical plus a page `<Helmet>` now produce two of each. `titleTemplate` and `defaultTitle` still apply within one instance. `htmlAttributes` and `bodyAttributes` are still applied by direct DOM writes. The `HelmetProvider` `context` object "will not be populated with helmet state on React 19", so a prerender script that reads `helmetContext.helmet.title.toString()` gets nothing.
 
 Both approaches therefore need the same discipline: exactly one component owns the head for the current route.
 
@@ -138,7 +140,7 @@ On the client this is enough for Google's rendered DOM. It is not enough for sha
 
 Prerender a route when it must rank, be shared with a preview, or show its canonical to crawlers that do not render. Leave routes client-only when they sit behind login or depend on wallet or user state.
 
-React Router's `prerender` option lives in `react-router.config.ts` and is documented as framework mode only; data and declarative mode apps cannot use it. Framework mode is a Vite plugin from `@react-router/dev` with its own route module conventions. For an app using `react-router-dom` in declarative or data mode, adopting it is a migration, not a config change. The options below work without it.
+React Router's `prerender` option lives in `react-router.config.ts` and is documented as framework mode only; data and declarative mode apps cannot use it. Framework mode is a Vite plugin from `@react-router/dev` with its own route module conventions. For an app using React Router in declarative or data mode, adopting it is a migration, not a config change. The options below work without it.
 
 ### Option A: render with React at build time
 
@@ -150,7 +152,7 @@ Build a prerender entry with Vite's SSR build (`vite build --ssr src/entry-prere
 - Head tags: when React renders only the `#root` fragment, there is no React-rendered `<head>` in its output, so do not assume its `<title>`, `<meta>` and `<link>` end up in the document head. Either render the whole document with React (`<html>`, `<head>`, `<body>`), take the built script and CSS URLs from Vite's manifest (`build.manifest: true`, written to `.vite/manifest.json`), and hydrate with `hydrateRoot(document, <Document />)`; or inject the app markup into the `index.html` template and write the head tags into the template's `<head>` yourself from the same `RouteMeta`. With the template approach, check where React put any `<title>`, `<meta>` and `<link>` it rendered: a canonical in `<body>` is ignored by Google.
 - Mounting: if the markup came from React's server renderer and the first client render produces identical output, use `hydrateRoot`. If you call `createRoot(...).render()` on prerendered markup, React clears it and rebuilds the DOM, which the docs say is slower, resets focus and scroll, and may lose input.
 
-Hydration mismatches in this stack come from the first client render differing from the build: reading `window`, `localStorage` or `matchMedia` during render, `Date.now()` or random values, a TanStack query that starts in `pending` because the cache was not dehydrated, and wallet state from wagmi, which exists only in the browser. Render browser-only and wallet-dependent UI after mount with React's documented two-pass pattern (a state flag set in an effect), and keep it out of anything that must rank. Treat mismatch warnings as bugs; React recovers by client rendering, at a cost.
+Hydration mismatches in this stack come from the first client render differing from the build: reading `window`, `localStorage` or `matchMedia` during render, `Date.now()` or random values, a TanStack query that starts in `pending` because the cache was not dehydrated, and wallet state from wagmi, which exists only in the browser. On React 19.3 and later, mark browser-only and wallet-dependent subtrees with `use(browser())` (from `react-dom`) inside a `<Suspense>` boundary: the prerender keeps the fallback, and the client renders the subtree after hydration without a recoverable error. On earlier React, render them after mount with the two-pass pattern (a state flag set in an effect). Either way, keep them out of anything that must rank. Treat mismatch warnings as bugs; React recovers by client rendering, at a cost.
 
 ### Option B: snapshot the built app with a headless browser
 
@@ -215,6 +217,7 @@ When a route has too many records to prerender (one page per token, listing or p
 `vite-plugin-sitemap` (built on `sitemap-ts`) runs in Vite's `closeBundle` hook, globs `**/*.html` in `outDir`, adds `dynamicRoutes`, removes `exclude`, and writes `sitemap.xml` and, by default, `robots.txt`. From its source:
 
 - `hostname` defaults to `http://localhost/`. Unset, every `<loc>` and the `Sitemap:` line in robots.txt point at localhost.
+- `outDir` is the plugin's own option (default `'dist'`, resolved from the working directory), not Vite's `build.outDir`. Set it explicitly whenever the build writes anywhere else, such as `dist/client` in a Worker setup, or the plugin scans and writes the wrong folder.
 - A client-rendered build has one HTML file, so the scan finds only `/`. Every public route must come from `dynamicRoutes`. HTML written by a prerender script after `vite build` finishes is not scanned either.
 - `404.html` and any shell file are scanned and listed as `/404` and `/app-shell`. List them in `exclude`.
 - `exclude` is exact string equality on normalized routes: no globs, no prefixes, and routes lose their trailing slash (`/blog/` becomes `/blog`).
@@ -234,7 +237,7 @@ const SCANNED_ROUTES = new Set(['/'])
 const NON_PAGE_ROUTES = ['/404', '/app-shell']
 
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), '')
+  const env = loadEnv(mode, process.cwd(), 'VITE_')
   const siteOrigin = requireOrigin(env.VITE_SITE_ORIGIN, 'VITE_SITE_ORIGIN')
   const routes = indexableRoutes()
   return {

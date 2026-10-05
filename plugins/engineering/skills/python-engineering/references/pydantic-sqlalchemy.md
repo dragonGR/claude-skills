@@ -1,6 +1,6 @@
-# Pydantic v2 and SQLAlchemy 2.0
+# Pydantic v2 and SQLAlchemy 2.x
 
-Read this when writing Pydantic models or SQLAlchemy sessions and queries, or when migrating Pydantic v1 to v2 or SQLAlchemy 1.x to 2.0. Check the installed major versions first; a project can run v2 while importing `pydantic.v1` in places.
+Read this when writing Pydantic models or SQLAlchemy sessions and queries, or when migrating Pydantic v1 to v2 or SQLAlchemy 1.x to 2.x. Check the installed versions first; a project can run v2 while importing `pydantic.v1` in places.
 
 ## Pydantic v1 to v2
 
@@ -58,9 +58,7 @@ def update_settings(
 
 **Secrets.** `SecretStr` hides the value in `repr` and JSON output; `.get_secret_value()` at the point of use.
 
-**Mutable defaults are safe.** Pydantic deep-copies non-hashable defaults per instance; `items: list[Item] = []` on a model is not the shared-default bug.
-
-## SQLAlchemy 2.0 session lifecycle
+## SQLAlchemy 2.x session lifecycle
 
 A `Session` is one unit of work and not thread-safe. An `AsyncSession` is one task's unit of work and not safe across concurrent tasks either.
 
@@ -87,9 +85,7 @@ Transaction shape: `with Session(engine) as session, session.begin():` commits o
 
 **Expire on commit.** `expire_on_commit=True` (the default) expires every loaded object at commit. Touching an attribute afterwards issues a new query, raises `DetachedInstanceError` if the session is closed, and under asyncio attempts implicit IO. Build response objects before commit or close, or configure `async_sessionmaker(engine, expire_on_commit=False)` for async code.
 
-**Async specifics.** Lazy loading needs implicit IO, which asyncio cannot do on attribute access; it raises (`MissingGreenlet`). Eager-load what the response needs, or use `AsyncAttrs` and `await obj.awaitable_attrs.children`. `await engine.dispose()` on shutdown.
-
-**Fork.** An engine created before a pre-fork server forks shares pooled connections with the parent. Create the engine after fork, or call `engine.dispose(close=False)` in the child initializer (1.4.33+).
+**Async specifics.** Lazy loading needs implicit IO, which asyncio cannot do on attribute access; it raises (`MissingGreenlet`). Eager-load what the response needs, or use `AsyncAttrs` and `await obj.awaitable_attrs.children`. `await engine.dispose()` on shutdown. From 2.1, `greenlet` is installed only with the `sqlalchemy[asyncio]` extra; without it, importing `sqlalchemy.ext.asyncio` fails with an `ImportError` naming that extra.
 
 ## N+1 and loading strategies
 
@@ -111,12 +107,13 @@ tickets = db.scalars(
 ```
 
 - `selectinload` for one-to-many and many-to-many (one extra `IN` query, no row multiplication).
-- `joinedload` for many-to-one. When joined-loading a collection, call `.unique()` on the result; 2.0 raises otherwise.
+- `joinedload` for many-to-one. When joined-loading a collection, call `.unique()` on the result; 2.x raises otherwise.
 - `raiseload("*")` in list queries, or `lazy="raise"` on relationships, turns a future N+1 into an error in tests instead of a slow endpoint in production.
 - In tests for list endpoints, assert the number of statements (an event listener on `before_cursor_execute` counting calls) so regressions are caught.
 
-## Other 2.0 changes worth knowing
+## Other 2.x changes worth knowing
 
 - `session.query(Model)` is legacy; new code uses `select()` with `session.scalars()` / `session.execute()`.
 - `session.get(Model, pk)` replaces `query.get(pk)`.
 - Raw strings are not accepted as SQL; they must be wrapped in `text()`, which then deserves the same injection review as any string SQL.
+- 2.1 requires Python 3.11+, and a bare `postgresql://` URL now selects psycopg 3 instead of psycopg2. An image that has only psycopg2 installed fails at `create_engine` with `No module named 'psycopg'` after the upgrade; name the driver in the URL (`postgresql+psycopg://` or `postgresql+psycopg2://`) so the upgrade cannot switch it.

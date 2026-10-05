@@ -1,6 +1,6 @@
 # asyncio patterns
 
-Read this when writing or reviewing asyncio code: background tasks, fan-out, timeouts, cancellation, blocking calls and shutdown. Examples assume Python 3.11+ (`TaskGroup`, `asyncio.timeout`); on 3.9 and 3.10 use `asyncio.wait_for` and `gather` as noted.
+Read this when writing or reviewing asyncio code: background tasks, fan-out, timeouts, cancellation, blocking calls and shutdown. Examples assume Python 3.11+ (`TaskGroup`, `asyncio.timeout`, `except*`).
 
 ## Supervised background tasks
 
@@ -116,7 +116,7 @@ except (TimeoutError, httpx.TransportError):
 
 `asyncio.timeout` cancels the body and raises the builtin `TimeoutError`. The client's own timeouts raise `httpx.TimeoutException`, which is a `TransportError` and not a `TimeoutError`, so catching only `TimeoutError` misses them. In both cases the request may have reached the provider. Record the operation as pending with its idempotency key and reconcile it (query the provider, or retry with the same key), never mark it failed and never retry without the key.
 
-`asyncio.wait_for(aw, timeout)` does the same on older versions and raises `asyncio.TimeoutError` before 3.11. It waits for the cancelled task to actually finish, so total time can exceed the timeout when the inner code is slow to clean up.
+`asyncio.wait_for(aw, timeout)` does the same for a single awaitable. It waits for the cancelled task to actually finish, so total time can exceed the timeout when the inner code is slow to clean up.
 
 ## Cancellation
 

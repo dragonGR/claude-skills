@@ -1,6 +1,6 @@
 ---
 name: seo-engineering
-description: Technical SEO: indexing, noindex and robots.txt, canonicals, redirects, status codes, hreflang, sitemaps, structured data, Core Web Vitals, AI crawlers, and how React + Vite SPAs render for Google and link-preview bots. Load it before building or reviewing any public page, route, redirect or head tag, and when pages drop out of Google or the wrong URL ranks.
+description: Technical SEO: indexing, noindex and robots.txt, canonicals, redirects, status codes, hreflang, sitemaps, structured data, Core Web Vitals, AI crawlers, and what Google and link-preview bots see from React + Vite SPAs. Load it for any public page, route, redirect or head tag, and when pages drop out of Google or the wrong URL ranks.
 license: MIT
 metadata:
   author: Alex Tsanis
@@ -10,7 +10,7 @@ metadata:
 
 A crawler is an unauthenticated, stateless, non-interactive client that trusts your status codes, headers and `<head>` more than your intentions. Most SEO incidents are ordinary engineering bugs: a 200 on a missing page, a header set on the wrong environment, a canonical built from the request, a rule in one layer that another layer contradicts. Ranking advice beyond this is mostly guesswork; do not present it as fact.
 
-Judge every change by what a crawler receives: the status line, response headers and raw HTML for the exact URL, then the rendered DOM. Fetch them (see `references/audit.md`) instead of reasoning from the component tree.
+Judge every change by what a crawler receives: the status line, response headers and raw HTML for the exact URL, then the rendered DOM. Fetch them (see [references/audit.md](references/audit.md)) instead of reasoning from the component tree.
 
 ## Failure catalogue
 
@@ -34,7 +34,7 @@ Each entry: what it looks like, why it breaks, what to do instead.
 
 **Soft 404.** A missing product, an empty search, an unpublished article or a "no longer available" page renders a friendly message with 200. Google reports these as soft 404s and they waste crawl on thin pages. Return 404 (or 410) for things that do not exist, from the server, before streaming starts. An out-of-stock product that still exists and has content is not a 404.
 
-**SPA returning 200 for every route.** `try_files $uri /index.html`, a Netlify `/* /index.html 200` rule, Cloudflare Workers `not_found_handling: "single-page-application"`, a Cloudflare Pages project with no top-level `404.html` (Pages then assumes an SPA), or an Express `app.get('*')` fallback. Every typo URL and every deleted page is a 200, and a React Router `path="*"` route that renders "Page not found" cannot change that. The host should know the route table and return 404 for unknown paths: a 404 page when every public route is a prerendered file, or a Worker that serves the shell only for known client routes. If it cannot, Google documents two client-side fallbacks: a JavaScript redirect to a URL that the server answers with 404, or rendering `<meta name="robots" content="noindex">` on the not-found view. Only render that noindex when the API confirmed the record is gone, never on a timeout or 5xx. Patterns in `references/react-vite-spa.md`.
+**SPA returning 200 for every route.** `try_files $uri /index.html`, a Netlify `/* /index.html 200` rule, Cloudflare Workers `not_found_handling: "single-page-application"`, a Cloudflare Pages project with no top-level `404.html` (Pages then assumes an SPA), or an Express `app.get('*')` fallback. Every typo URL and every deleted page is a 200, and a React Router `path="*"` route that renders "Page not found" cannot change that. The host should know the route table and return 404 for unknown paths: a 404 page when every public route is a prerendered file, or a Worker that serves the shell only for known client routes. If it cannot, Google documents two client-side fallbacks: a JavaScript redirect to a URL that the server answers with 404, or rendering `<meta name="robots" content="noindex">` on the not-found view. Only render that noindex when the API confirmed the record is gone, never on a timeout or 5xx. Patterns in [references/react-vite-spa.md](references/react-vite-spa.md).
 
 **Redirect chains and loops.** `http://example.com/Shoes` to `https://example.com/Shoes` to `https://www.example.com/Shoes` to `https://www.example.com/shoes/`. Googlebot follows up to 10 hops, and each layer (CDN, load balancer, app, static host trailing-slash handling) adds its own. Loops usually come from two layers disagreeing, such as the app redirecting to https because TLS terminates at the proxy and it ignores `X-Forwarded-Proto`, or the CDN adding a slash that the framework strips. Redirect every variant straight to the final URL in one hop, and test with `curl -sIL` from outside the CDN.
 
@@ -50,7 +50,7 @@ Each entry: what it looks like, why it breaks, what to do instead.
 
 **Canonical pointing at a URL that is not the final page.** The canonical target redirects, returns 404, has noindex, uses `http://`, or has a different trailing slash from the served URL. Each one contradicts the canonical with another signal. A canonical target must be the absolute URL that returns 200, is indexable and declares itself canonical.
 
-**Canonical built from the request.** `canonical = req.protocol + '://' + req.headers.host + req.originalUrl`. Behind a proxy that yields `http://`, internal hostnames, a spoofed `Host`, and every `?utm_`, `?sort=` and `?sessionid=` variant claiming to be canonical. Build it from configured origin plus the route's identity plus only the parameters that select distinct content.
+**Canonical built from the request.** `canonical = req.protocol + '://' + req.headers.host + req.originalUrl`. Behind a proxy that yields `http://`, internal hostnames, a spoofed `Host`, and every `?utm_`, `?sort=` and `?sessionid=` variant claiming to be canonical. In an SPA head component the same bug is `origin + location.pathname + location.search`, or `window.location.origin`, which also makes staging and preview hosts canonical on themselves. Build it from configured origin plus the route's identity (slug, id, page number) plus only the parameters that select distinct content.
 
 **Canonical injected or changed client-side.** A React `<link rel="canonical">`, a `<Helmet>` or a `useEffect` sets the canonical, or overrides the one in the served HTML. Google's guidance is not to change the canonical with JavaScript, and if JavaScript must set it, to set the same value as the original HTML and keep it the only `rel="canonical"` on the page; a different value is a conflicting signal, and crawlers that do not render never see it. Put the canonical in the served HTML (prerendered for public routes) and make the client render the identical value.
 
@@ -66,7 +66,7 @@ Each entry: what it looks like, why it breaks, what to do instead.
 
 **hreflang that is not reciprocal or omits itself.** The German page lists English and French but not itself, or English lists German while German's set was generated from a different locale list. Google requires every version to list itself and all others, and ignores a pair that does not point both ways. Generate the whole set from one locale table, identically on every version, including `x-default` for the selector or fallback page.
 
-**Invalid codes.** `en-UK` (Google ignores the reserved `UK` region, so it is plain `en`; the code is `en-GB`), region alone (`hreflang="us"`), `jp` for Japanese (`ja`), `zh-CN` written as `cn`, or underscores (`en_GB`). Language is ISO 639-1; the optional region is ISO 3166-1 alpha-2. Validate codes against a list at build time instead of trusting CMS input.
+**Invalid codes.** `en-UK` (Google ignores the reserved `UK` region, so it is plain `en`; the code is `en-GB`), region alone (`hreflang="us"`), `jp` for Japanese (`ja`), `zh-CN` written as `cn`, underscores (`en_GB`), or UN M.49 regions (`es-419`). Language is ISO 639-1, then an optional ISO 15924 script (`zh-Hant`), then an optional ISO 3166-1 alpha-2 region (`zh-Hans-US`). Validate codes against a list at build time instead of trusting CMS input, and make the validator accept script codes before someone "fixes" `zh-Hant` into `zh-TW`, which means something else.
 
 **Cross-language canonical.** `/de/schuhe` declares `https://example.com/en/shoes` as canonical. Translated pages are not duplicates, and this tells Google the German page is a copy of the English one, which undoes the hreflang. Each locale canonicalizes to itself. hreflang targets are the canonical, 200, indexable URLs; an annotation that lands on a redirect or a page canonicalized elsewhere contradicts your other signals.
 
@@ -84,7 +84,7 @@ Each entry: what it looks like, why it breaks, what to do instead.
 
 ### React + Vite SPAs
 
-A client-rendered SPA serves one `index.html` for every route. Google renders it later in a queue; link-preview bots and crawlers that do not run JavaScript only ever see that file. Details, code and hosting patterns: `references/react-vite-spa.md`.
+A client-rendered SPA serves one `index.html` for every route. Google renders it later in a queue; link-preview bots and crawlers that do not run JavaScript only ever see that file. Details, code and hosting patterns: [references/react-vite-spa.md](references/react-vite-spa.md).
 
 **Route-specific tags in the shell.** `index.html` carries `<link rel="canonical" href="https://example.com/">`, `og:url`, `og:image` or a description. The fallback serves it for every URL, so every route declares the home page canonical and every shared link previews as the home page; a per-route canonical rendered later by React is a second, conflicting one. Keep only tags that are true for every URL in the shell.
 
@@ -98,7 +98,7 @@ A client-rendered SPA serves one `index.html` for every route. Google renders it
 
 **Origin or environment baked into the wrong build.** `%VITE_SITE_ORIGIN%` in `index.html` is left literally in the output when the variable is undefined. `vite build` defaults to `production` mode, so a staging build made without `--mode` carries the production origin and `import.meta.env.PROD === true`. Validate origin variables in `vite.config.ts` and fail the build; decide indexability per hostname at the host, not in the bundle.
 
-**Client-only rendering for pages that should rank.** It can be indexed, but it goes through a render queue and every failure mode above applies. Prerender indexable and shareable pages. Client rendering is fine for the app behind login and for wallet- or user-specific views. React Router's `prerender` option is framework mode only; a `react-router-dom` app in declarative or data mode prerenders with React's own `react-dom/static` APIs or a headless-browser snapshot at build time.
+**Client-only rendering for pages that should rank.** It can be indexed, but it goes through a render queue and every failure mode above applies. Prerender indexable and shareable pages. Client rendering is fine for the app behind login and for wallet- or user-specific views. React Router's `prerender` option is framework mode only; an app using React Router in declarative or data mode prerenders with React's own `react-dom/static` APIs or a headless-browser snapshot at build time.
 
 ### Sitemaps
 
@@ -108,16 +108,13 @@ A client-rendered SPA serves one `index.html` for every route. Google renders it
 
 **Limits and staleness.** A sitemap holds at most 50,000 URLs or 50 MB uncompressed; split with a sitemap index. A sitemap generated once at build lists only what existed at deploy time.
 
-**vite-plugin-sitemap defaults.** `hostname` defaults to `http://localhost/`; `lastmod` defaults to the build time for every route, including routes missing from a per-route map; `generateRobotsTxt` defaults to `true` and overwrites the `robots.txt` copied from `public/` with `Allow: /`; it scans built HTML, so an SPA build yields only `/` plus any `404.html` or shell file. Set `hostname` from validated config, list routes in `dynamicRoutes`, exclude non-pages, pass real dates, and turn robots generation off when robots.txt is maintained elsewhere.
+**vite-plugin-sitemap defaults.** `hostname` defaults to `http://localhost/`; `lastmod` defaults to the build time for every route, including routes missing from a per-route map; `generateRobotsTxt` defaults to `true` and overwrites the `robots.txt` copied from `public/` with `Allow: /`; it scans built HTML, so an SPA build yields only `/` plus any `404.html` or shell file; it scans and writes its own `outDir` option (default `'dist'`), not Vite's `build.outDir`. Set `hostname` from validated config, list routes in `dynamicRoutes`, exclude non-pages, pass real dates, and turn robots generation off when robots.txt is maintained elsewhere.
 
 ### Metadata and content parity
 
 **Duplicate or boilerplate titles.** Every product under a category renders `Products | Shop`, or the title falls back to the site name when data fails to load. Google rewrites title links it finds boilerplate, half-empty or inaccurate. Generate each title from that page's own data, and treat a missing title as a render error, not a fallback.
 
 **Mobile and desktop differ.** Google indexes the mobile version. Server-side UA sniffing that serves a lighter mobile page without the specs, reviews, structured data or robots tags of the desktop version removes them from the index.
-
-**Canonical built from the router location.** `href={origin + location.pathname + location.search}` in a head component makes every `?utm_`, `?sort=` and `?ref=` variant claim to be canonical, and `window.location.origin` makes staging and preview hosts canonical on themselves. Build it from the configured origin plus the route's identity (slug, id, page number).
-
 ### Structured data
 
 **JSON-LD that does not match the page.** `Product` markup with the list price while the page shows the sale price, an `aggregateRating` that is not displayed, reviews that do not exist, `availability: InStock` from a stale cache. Google's policies forbid marking up content that is not visible to readers, and violations can lead to a manual action. Build JSON-LD from the same view model the page renders, in the same request.
@@ -140,7 +137,7 @@ Google's "good" thresholds at the 75th percentile of page loads: LCP at most 2.5
 
 **Treating robots.txt as access control.** Vendors document separate tokens for training, search and user-initiated fetches, and some user-initiated fetchers (ChatGPT-User, Perplexity-User) say robots.txt may not apply. User agents are also spoofed. If content must not be fetched, enforce it at the edge or with authentication, and verify claimed crawlers against the vendor's published IP ranges or DNS.
 
-**Blocking the wrong token.** `Google-Extended` controls use for Gemini training and grounding; it does not affect Search inclusion or ranking. AI Overviews and AI Mode are governed by Googlebot access and snippet controls (`nosnippet`, `data-nosnippet`, `max-snippet`, `noindex`), so blocking Googlebot to opt out of AI features removes the site from Search. Google states that no AI-specific text files such as `llms.txt` are needed to appear in those features. Token reference: `references/crawl-control.md`.
+**Blocking the wrong token.** `Google-Extended` controls use for Gemini training and grounding; it does not affect Search inclusion or ranking. AI Overviews and AI Mode are governed by Googlebot access and snippet controls (`nosnippet`, `data-nosnippet`, `max-snippet`, `noindex`), so blocking Googlebot to opt out of AI features removes the site from Search. Google states that no AI-specific text files such as `llms.txt` are needed to appear in those features. Token reference: [references/crawl-control.md](references/crawl-control.md).
 
 ## Decision rules
 
@@ -163,7 +160,7 @@ Google's "good" thresholds at the 75th percentile of page loads: LCP at most 2.5
 - Are robots directives in the server response, and is nothing that carries noindex also disallowed in robots.txt?
 - Do non-production environments require authentication and send `X-Robots-Tag: noindex`, keyed so an unset environment fails closed?
 - Does every non-canonical host, protocol, case and slash variant redirect to the final URL in one 301/308 hop?
-- Are hreflang sets reciprocal, self-referencing, valid ISO 639-1 (plus optional ISO 3166-1 region) codes, pointed at canonical 200 URLs?
+- Are hreflang sets reciprocal, self-referencing, valid codes (ISO 639-1, optional ISO 15924 script, optional ISO 3166-1 region), pointed at canonical 200 URLs?
 - Is every navigational element an `<a href>`, and is ranking content present without clicks, scrolling, cookies or storage?
 - Does the sitemap list only canonical, indexable, 200, absolute URLs on the production origin with truthful `lastmod`, and did the sitemap plugin leave robots.txt alone?
 - Is JSON-LD built from the rendered data and escaped for a script context?
@@ -173,7 +170,7 @@ Google's "good" thresholds at the 75th percentile of page loads: LCP at most 2.5
 
 ## References
 
-- `references/audit.md`: read when auditing a site or verifying a fix; curl-based checks for status, redirects, headers, canonicals and sitemaps, plus how to report findings.
-- `references/crawl-control.md`: read when editing robots.txt, robots headers, staging protection, faceted navigation rules or AI crawler policy.
-- `references/international.md`: read when adding locales, hreflang or any geo or language based routing.
-- `references/react-vite-spa.md`: read when the site is a React + Vite SPA; what Google and preview bots see, the shell, per-route head tags with React 19 or react-helmet-async, prerendering, real 404s from static hosts, vite-plugin-sitemap and deploy caching.
+- [references/audit.md](references/audit.md): read when auditing a site or verifying a fix; curl-based checks for status, redirects, headers, canonicals and sitemaps, plus how to report findings.
+- [references/crawl-control.md](references/crawl-control.md): read when editing robots.txt, robots headers, staging protection, faceted navigation rules or AI crawler policy.
+- [references/international.md](references/international.md): read when adding locales, hreflang or any geo or language based routing.
+- [references/react-vite-spa.md](references/react-vite-spa.md): read when the site is a React + Vite SPA; what Google and preview bots see, the shell, per-route head tags with React 19 or react-helmet-async, prerendering, real 404s from static hosts, vite-plugin-sitemap and deploy caching.

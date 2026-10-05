@@ -1,3 +1,5 @@
+# SEO audit
+
 Read this when auditing a site, reviewing an SEO-affecting change end to end, or proving that a fix works on the deployed URL.
 
 The code shows intent; the response shows what shipped. Host rules, CDN rules, build plugins, the SPA fallback and a stale cache all sit between them. Every finding needs a fetched response as evidence.
@@ -118,4 +120,4 @@ Use URL Inspection's live test for the Google-rendered HTML, the Google-selected
 
 ## Reporting
 
-For each finding: the URL and template, the exact response evidence (status line, header, HTML snippet), why it matters for crawling, indexing or ranking, and the fix at the layer that owns it (CDN, server, framework config, template). Separate defects (wrong status, canonical to a redirect, noindex behind a disallow, soft 404s, injection) from preferences (title wording, description length). Before reporting, re-fetch once more and check that the behaviour is not a cache artefact, a bot challenge served only to curl, or an environment you did not mean to test.
+For each finding: the URL and template, the exact response evidence (status line, header, HTML snippet), why it matters for crawling, indexing or ranking, and the fix at the layer that owns it (CDN, server, framework config, template). Separate defects (wrong status, canonical to a redirect, noindex behind a disallow, soft 404s, injection) from preferences (title wording, description length). Before reporting, re-fetch once more and check that the behavior is not a cache artifact, a bot challenge served only to curl, or an environment you did not mean to test.

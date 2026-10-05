@@ -1,11 +1,11 @@
 # React Router in a client-rendered SPA
 
-Read this when adding or changing routes, lazy loading, loaders, error boundaries, not-found handling or navigation side effects. Examples use React Router 7 in data mode (`createBrowserRouter` plus `<RouterProvider>`), with declarative mode (`<BrowserRouter>` plus `<Routes>`) called out where it differs. Framework mode, SSR and route modules are out of scope.
+Read this when adding or changing routes, lazy loading, loaders, error boundaries, not-found handling or navigation side effects. Examples use React Router 8 in data mode (`createBrowserRouter` plus `<RouterProvider>`, imports from `react-router` and `RouterProvider` from `react-router/dom`) and run unchanged on 7, with declarative mode (`<BrowserRouter>` plus `<Routes>`) called out where it differs. Framework mode, SSR and route modules are out of scope.
 
 ## Check the setup first
 
 - Mode: `createBrowserRouter` means data mode. `<BrowserRouter>` means declarative mode, which has no loaders, actions, `errorElement`, route `lazy`, `useBlocker`, `useNavigation` or `<ScrollRestoration>`. Advice written for one mode often does not compile in the other.
-- Package: in v7, `react-router-dom` re-exports everything from `react-router`, so either import works. v8 removes `react-router-dom`; new code can import from `react-router` now (and `RouterProvider` from `react-router/dom`) to make that upgrade a no-op.
+- Package: v8 ships only `react-router`, with `RouterProvider` in `react-router/dom`. A v7 app may still import from `react-router-dom`, which there only re-exports `react-router`; write new imports against `react-router` so the v8 upgrade does not touch them.
 - Router instance: create it once at module level. A `createBrowserRouter` call inside a component rebuilds the router and resets navigation state on every render of that component.
 
 ## Route-level code splitting
@@ -36,7 +36,7 @@ const router = createBrowserRouter([
 ])
 ```
 
-`path`, `index` and `children` cannot be lazy; the router needs them to match before anything loads. Since 7.5, `lazy` also accepts an object with one loader per route property, so a small loader can arrive without the component's heavy dependencies. Check the installed version's docs before using it.
+`path`, `index` and `children` cannot be lazy; the router needs them to match before anything loads. `lazy` also accepts an object with one loader per route property (7.5 and later), so a small loader can arrive without the component's heavy dependencies.
 
 Declarative mode uses `React.lazy`:
 
@@ -93,7 +93,7 @@ export function projectLoader(queryClient: QueryClient) {
     const parsed = ProjectParams.safeParse(params)
     if (!parsed.success) throw data('Not found', { status: HTTP_NOT_FOUND })
     const { orgId, projectId } = parsed.data
-    await queryClient.ensureQueryData(projectQueries.detail(orgId, projectId))
+    await queryClient.query({ ...projectQueries.detail(orgId, projectId), staleTime: 'static' })
     return parsed.data
   }
 }
@@ -108,7 +108,7 @@ export function ProjectPage() {
 ```
 
 - One `queryOptions` object per resource gives the loader, the component and invalidation the same key.
-- `ensureQueryData` returns cached data if present and fetches otherwise. Current TanStack Query v5 docs mark it, `fetchQuery` and `prefetchQuery` as deprecated in favor of `queryClient.query(...)`; use whichever the installed minor provides and do not mix both styles in one codebase.
+- The loader wants "cached data if present, fetch otherwise". `queryClient.query` (TanStack Query 5.102 and later) fetches whenever the cached data is stale, and the default `staleTime` is 0, so a bare `query(opts)` refetches on every navigation; `staleTime: 'static'` restores the cache-first behavior. Before 5.102 the same call is `ensureQueryData(opts)`, which 5.102 deprecates along with `fetchQuery` (now `query(opts)`) and `prefetchQuery` (now `query(opts).catch(noop)`). Use whichever the installed minor provides, and do not mix both styles in one codebase.
 - Await in the loader when the page is useless without the data (the router keeps the old page visible and `useNavigation().state` is `'loading'`). Start the request without awaiting when the page can render a skeleton, so navigation is instant.
 - An awaited query that fails makes the loader throw, and the route's `errorElement` renders. Decide whether that is right for the page or whether the component should render its own error state instead.
 - Route params are user input. Parse them; throw a 404 for anything that does not fit.
@@ -133,7 +133,7 @@ export function RouteError() {
 
 ## Navigation side effects
 
-- Focus and title. A route change replaces content without a document load, so focus stays on the clicked link (now removed) or falls to `<body>`, and screen readers hear nothing. React Router does not manage focus. Set `document.title` per route and focus the new page's heading on mount. The `accessibility` skill has the component and the cases to skip (first load, query-string-only changes).
+- Focus and title. A route change replaces content without a document load, so focus stays on the clicked link (now removed) or falls to `<body>`, and screen readers hear nothing. React Router does not manage focus. Give each route a unique title through the app's one title mechanism (React 19's `<title>` or `react-helmet-async`; an extra `document.title` effect beside it races it) and focus the new page's heading on mount. The `accessibility` skill has the component and the cases to skip (first load, query-string-only changes).
 - Scroll. In data mode, render `<ScrollRestoration />` once in the root layout; it restores saved positions on back and forward and stores them in `sessionStorage`. Declarative mode has no equivalent, and a pushed route keeps the previous scroll offset unless the app resets it.
 - Transitions. Animating route changes with `AnimatePresence` needs the `useOutlet` or keyed `<Routes location>` pattern; the `react-motion` skill covers it, including how exits interact with scroll restoration and focus.
 - Unsaved changes. `useBlocker` (data mode) intercepts in-app navigations; a `beforeunload` listener covers reloads and tab closes. Neither replaces saving drafts.

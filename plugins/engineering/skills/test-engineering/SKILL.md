@@ -1,6 +1,6 @@
 ---
 name: test-engineering
-description: Tests that catch real bugs: levels, mocks versus real dependencies, concurrency, idempotency and authorization tests, property-based tests, fake clocks, flaky tests, snapshots, coverage, Playwright. Load it before writing or reviewing any test or test suite, when tests pass but bugs ship, or when a test is flaky.
+description: Tests that catch real bugs: mocks versus real dependencies, Testcontainers, MSW, concurrency, idempotency and authorization tests, property-based and mutation testing, fake clocks, flaky tests, snapshots, Playwright. Load it before writing or reviewing any test or test suite, when tests pass but bugs ship, or when a test is flaky.
 license: MIT
 metadata:
   author: Alex Tsanis
@@ -23,7 +23,7 @@ A test earns its place when it fails if the behavior it is named after breaks. S
 
 ### Tests that prove nothing
 
-**Passes with the guard removed.** The ownership check, status check or limit in a sensitive path can be deleted and the suite stays green, usually because every test uses the owner, a valid state and small amounts. For each guard, delete or invert it locally, run the tests, and confirm one fails for the right reason. Procedure and mutation tools in `references/guard-checks.md`.
+**Passes with the guard removed.** The ownership check, status check or limit in a sensitive path can be deleted and the suite stays green, usually because every test uses the owner, a valid state and small amounts. For each guard, delete or invert it locally, run the tests, and confirm one fails for the right reason. Procedure and mutation tools in [references/guard-checks.md](references/guard-checks.md).
 
 **Assertions that never run.** The assertion sits somewhere that is skipped when the code is wrong.
 
@@ -51,7 +51,7 @@ Same family: `expect(p).rejects...` without `await`; assertions inside a `forEac
 
 **Negative tests that pass for the wrong reason.** "Bob cannot read Alice's invoice" gets its 403 because Bob's token was malformed, the CSRF header was missing, or the URL was wrong, not because of the ownership check. Pair every denial with a positive control: the identical request by an allowed caller succeeds. After a denial, assert the state did not change and no side effect was emitted.
 
-**Auth bypassed in the harness.** A global fixture sets `app.dependency_overrides[get_current_user] = lambda: admin`, a test settings flag disables auth middleware, or the user factory defaults to staff. Every authorization test then runs as an admin and proves nothing. Keep the real authentication path in tests and mint real sessions or tokens per role through a helper. Template in `references/authz-matrix.md`.
+**Auth bypassed in the harness.** A global fixture sets `app.dependency_overrides[get_current_user] = lambda: admin`, a test settings flag disables auth middleware, or the user factory defaults to staff. Every authorization test then runs as an admin and proves nothing. Keep the real authentication path in tests and mint real sessions or tokens per role through a helper. Template in [references/authz-matrix.md](references/authz-matrix.md).
 
 **Asserting error message text.** `toThrow("Insufficient funds: balance 500 < 600")` or `pytest.raises(E, match="...")` on prose breaks when copy changes, so people loosen it until it matches anything. Assert the error class or a machine-readable code (`body.error.code == "insufficient_funds"`). Check text only where the text is the contract (user-facing copy under review, CLI output that scripts parse), and match the stable part.
 
@@ -67,7 +67,7 @@ Same family: `expect(p).rejects...` without `await`; assertions inside a `forEac
 
 **A different database engine.** SQLite, H2 or an in-memory repository standing in for PostgreSQL or MySQL. Non-`STRICT` SQLite accepts `'abc'` in an `INTEGER` column, ignores foreign keys unless `PRAGMA foreign_keys = ON`, treats `LIKE` as case-insensitive for ASCII, has no `SELECT ... FOR UPDATE`, and allows one writer at a time, so races cannot happen. An in-memory fake has no constraints at all, so check-then-insert looks correct. Run data-access and integration tests against the production engine and major version (Testcontainers or a CI service container), with the schema built by the real migrations rather than `create_all()` from models, which silently drops migration-only constraints and indexes.
 
-**Rollback isolation hiding commit-time behavior.** Each test runs inside a transaction that is rolled back. Nothing commits, so: deferred constraints are never checked (Django's `TestCase` checks them at the end of each test; most hand-rolled fixtures do not); `on_commit` hooks and outbox relays never fire; code that opens its own connection cannot see the test's rows; two "concurrent" requests share one connection and never contend; serialization failures and deadlocks cannot occur; and PostgreSQL `now()` returns the transaction start time, so every row the test writes gets the same timestamp and ordering by `created_at` ties. Tests of commit-dependent behavior need committed data and separate connections: truncation between tests (Django `TransactionTestCase`). Details in `references/real-dependencies.md`.
+**Rollback isolation hiding commit-time behavior.** Each test runs inside a transaction that is rolled back, so nothing commits: deferred constraints are never checked, `on_commit` hooks never fire, other connections cannot see the rows, requests never contend for locks, and every `now()` returns the same instant. Tests of commit-dependent behavior need committed data, separate connections and truncation between tests (Django `TransactionTestCase`); the full list is in [references/real-dependencies.md](references/real-dependencies.md).
 
 **Mocked HTTP that does not match the real API.** A hand-written mock returns `{ id, status: "succeeded" }`. The real API nests the object, returns amounts in minor units, answers 200 with an error body, paginates, or sends `null` for fields the mock always fills. Tests pass and production parses garbage. Build fixtures from recorded real responses with secrets scrubbed, parse them through the same schema the production client uses, cover the error, 429, 5xx, timeout and malformed shapes, and fail on any unmatched request (MSW `onUnhandledFrame: "error"`, named `onUnhandledRequest` before MSW 3).
 
@@ -85,7 +85,7 @@ Test data access against the real driver and engine. The same applies to decimal
 
 **Shared state and order dependence.** Module-level variables carrying ids between tests, tests that depend on rows an earlier test created, fixed emails or ids that collide when workers share a database, cached settings, mutated env vars, mocks never reset. Symptom: passes alone and fails in the suite, or the reverse. Each test creates what it needs with unique values and restores global state, and CI runs in random order with the seed printed (pytest-randomly, Jest `--randomize`, Vitest `--sequence.shuffle`).
 
-**Uncontrolled time.** `datetime.now()`, `Date.now()` and SQL `now()` in logic under test. The test passes except around midnight UTC, month end, DST changes, or on a runner in another zone, and expiry tests sleep for real. Inject a clock or use a fake one, pin the zone, and test the boundary explicitly: one unit before expiry, exactly at it, after it. Faking the process clock does not move the database clock; if SQL compares against `now()`, pass the time as a parameter. Templates in `references/determinism.md`.
+**Uncontrolled time.** `datetime.now()`, `Date.now()` and SQL `now()` in logic under test. The test passes except around midnight UTC, month end, DST changes, or on a runner in another zone, and expiry tests sleep for real. Inject a clock or use a fake one, pin the zone, and test the boundary explicitly: one unit before expiry, exactly at it, after it. Faking the process clock does not move the database clock; if SQL compares against `now()`, pass the time as a parameter. Templates in [references/determinism.md](references/determinism.md).
 
 **Uncontrolled randomness.** Random test data with no recorded seed, assertions on UUIDv4 order, set iteration order. Seed and print the seed. Keep counterexamples found by property tests as fixed regression cases.
 
@@ -97,7 +97,7 @@ Test data access against the real driver and engine. The same applies to decimal
 
 **Happy path only.** Every rejection branch of a sensitive operation needs a test: wrong owner, wrong state, over the limit, zero, negative, maximum and overflow amounts, unknown fields, expired token, duplicate request. Each asserts the exact rejection, unchanged state and no side effect.
 
-**No concurrency test on money paths.** Transfers, withdrawals, redemptions, stock and anything guarded by a balance, limit or uniqueness check. Fire conflicting requests at the same moment against the real database with one connection each, then assert the invariant: exactly one success, balance never negative, totals conserved. For a reliable reproduction, pause one request between its read and its write with a hook and run the other to completion. Templates in `references/concurrency-and-idempotency.md`.
+**No concurrency test on money paths.** Transfers, withdrawals, redemptions, stock and anything guarded by a balance, limit or uniqueness check. Fire conflicting requests at the same moment against the real database with one connection each, then assert the invariant: exactly one success, balance never negative, totals conserved. For a reliable reproduction, pause one request between its read and its write with a hook and run the other to completion. Templates in [references/concurrency-and-idempotency.md](references/concurrency-and-idempotency.md).
 
 **Idempotency tested only as a sequential replay.** The full set: same key sequential returns the stored result with one side effect; same key concurrent gives one side effect; same key with a different body is rejected; same key from another user neither collides nor leaks; provider succeeded but the response was lost, and the retry does not charge twice.
 
@@ -111,9 +111,7 @@ Test data access against the real driver and engine. The same applies to decimal
 
 **Tests that can reach production.** A base URL or key that falls back to a real endpoint when an env var is missing. Test config fails closed: required settings with no production default, and outbound network blocked except for explicit fakes.
 
-**Property tests sharing a per-test fixture.** A pytest function-scoped fixture runs once per test function, not once per Hypothesis example, so a database row or counter leaks across generated inputs. Hypothesis flags this with the `function_scoped_fixture` health check; build per-example state inside the test body.
-
-**Brittle E2E selectors.** `#root > div > div:nth-child(3) > button.btn-primary` or generated class names break on any layout change, and then the test gets deleted. Use `getByRole` with the accessible name, then `getByLabel`, then `getByTestId` for elements with no semantic role. Details in `references/e2e-playwright.md`.
+**Brittle E2E selectors.** `#root > div > div:nth-child(3) > button.btn-primary` or generated class names break on any layout change, and then the test gets deleted. Use `getByRole` with the accessible name, then `getByLabel`, then `getByTestId` for elements with no semantic role. Details in [references/e2e-playwright.md](references/e2e-playwright.md).
 
 ## Decision rules
 
@@ -161,12 +159,12 @@ Error assertions: type or machine-readable code, never full prose.
 
 ## References
 
-- `references/guard-checks.md`: read when checking whether tests cover a guard, or setting up Stryker, mutmut or cargo-mutants.
-- `references/concurrency-and-idempotency.md`: read when writing race, double-submit, idempotency-key or lost-response tests, in TypeScript or Python.
-- `references/authz-matrix.md`: read when writing or reviewing authorization tests for an API.
-- `references/property-based.md`: read when writing Hypothesis, fast-check, proptest or Foundry invariant tests.
-- `references/determinism.md`: read when a test depends on time, time zones, timers, randomness or order.
-- `references/real-dependencies.md`: read when setting up database containers, choosing test isolation, or faking third-party HTTP.
-- `references/e2e-playwright.md`: read when writing, reviewing or de-flaking Playwright tests.
+- [references/guard-checks.md](references/guard-checks.md): read when checking whether tests cover a guard, or setting up Stryker, mutmut or cargo-mutants.
+- [references/concurrency-and-idempotency.md](references/concurrency-and-idempotency.md): read when writing race, double-submit, idempotency-key or lost-response tests, in TypeScript or Python.
+- [references/authz-matrix.md](references/authz-matrix.md): read when writing or reviewing authorization tests for an API.
+- [references/property-based.md](references/property-based.md): read when writing Hypothesis, fast-check, proptest or Foundry invariant tests.
+- [references/determinism.md](references/determinism.md): read when a test depends on time, time zones, timers, randomness or order.
+- [references/real-dependencies.md](references/real-dependencies.md): read when setting up database containers, choosing test isolation, or faking third-party HTTP.
+- [references/e2e-playwright.md](references/e2e-playwright.md): read when writing, reviewing or de-flaking Playwright tests.
 
 Related skills: security-engineering for what the authorization and input tests must cover, database-engineering for the races and constraints the concurrency tests target, backend-architecture for idempotency and reconciliation design, performance-benchmarking for load and latency tests, solidity-engineering for Foundry fuzz, invariant and fork tests of smart contracts.

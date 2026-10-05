@@ -57,7 +57,7 @@ export default function () {
 - `maxVUs` defaults to `preAllocatedVUs`. Allocating VUs mid-test costs generator CPU, so preallocate close to `target_rate × expected_p99_seconds` with headroom.
 - Don't put `sleep()` in an arrival-rate scenario to simulate think time. The executor already sets the pacing, and sleep only ties up VUs.
 - The default end-of-test summary shows `avg, min, med, max, p(90), p(95)`, with no p99. Set `summaryTrendStats` (or `--summary-trend-stats`) to show the percentiles your SLO is written in.
-- `http_req_duration` is sending + waiting + receiving. It leaves out DNS, TCP connect and TLS handshake. When clients don't reuse connections, look at `http_req_connecting` and `http_req_tls_handshaking` too.
+- `http_req_duration` is sending + waiting + receiving. It leaves out DNS, TCP connect and TLS handshake. When clients don't reuse connections, look at `http_req_connecting` and `http_req_tls_handshaking` too. Since k6 1.0 the end-of-test summary is compact by default and leaves those metrics out; `--summary-mode=full` shows them (k6 2.x removed the `legacy` mode and `--no-summary`).
 - `http_req_failed` counts responses outside the expected statuses (200 to 399 unless changed with `http.setResponseCallback`). k6 follows redirects by default, so a redirect to a login page ends in a 200 and passes. So check the final status or a body marker on the endpoints that matter, and turn on `responseType: 'text'` for just those requests when `discardResponseBodies` is set.
 - Tag requests with a stable `name` when URLs contain ids. Otherwise every URL becomes its own time series and thresholds per endpoint stop working.
 - `discardResponseBodies: true` is what k6 recommends for load generation. It cuts generator memory and GC, which makes results more reliable.
@@ -69,7 +69,7 @@ export default function () {
 wrk -t"$THREADS" -c"$CONNECTIONS" -d"$DURATION" -R"$TARGET_RPS" --latency -s paths.lua "$BASE_URL"
 ```
 
-- `-R` is the target total rate. If you leave it out, wrk2 runs at 1000 requests per second, which is probably not the rate you meant. Always set it.
+- `-R` is the target total rate, and it is required: the code exits with "Throughput MUST be specified" without it, although the README still says it defaults to 1000. wrk2's last commit is from September 2019.
 - wrk2 measures latency from when each request should have been sent at the configured rate, which corrects for coordinated omission. `-U` prints the uncorrected histogram as well. The gap between the two shows how much a closed-loop tool would have hidden.
 - The first 10 seconds are calibration, so runs shorter than 10 to 20 seconds say little. Run for minutes.
 - Connections have to cover the rate: each connection has at most one request in flight, so `connections ≥ rate × latency` or the tool itself becomes the limit. Keep threads at or below the generator's cores.

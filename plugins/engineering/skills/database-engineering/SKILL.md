@@ -1,6 +1,6 @@
 ---
 name: database-engineering
-description: Schemas, migrations, backfills, transactions, locking, indexes and query performance for PostgreSQL, SQLite and Cloudflare D1. Load it before writing or reviewing any SQL, ORM query, schema or migration, even one statement, and when debugging races, deadlocks, lost updates, duplicate rows, lock timeouts or slow queries.
+description: Schemas, migrations, backfills, transactions, locking, indexes, connection pools and row-level security for PostgreSQL, SQLite and Cloudflare D1. Load it before writing or reviewing any SQL, ORM query, schema or migration, even one statement, and when debugging races, deadlocks, lost updates, duplicate rows, lock timeouts or slow queries.
 license: MIT
 metadata:
   author: Alex Tsanis
@@ -43,7 +43,7 @@ This is safe under PostgreSQL Read Committed: when a concurrent transaction chan
 
 **Trusting Read Committed with multi-row invariants.** Read Committed takes a new snapshot per statement, so two reads in one transaction can disagree. A rule over a set of rows ("one doctor stays on call", "allocations never exceed the budget", "bookings never overlap") breaks when two transactions each read the set and write a different row (write skew). PostgreSQL Repeatable Read allows write skew too. Fix: a constraint when the rule is expressible (unique, `CHECK`, a PostgreSQL exclusion constraint for overlaps); otherwise lock a row every writer must touch (the budget, the shift) with `FOR UPDATE`, or run `SERIALIZABLE` with a retry loop.
 
-**Serializable without retries.** PostgreSQL `SERIALIZABLE` and `REPEATABLE READ` abort a transaction with SQLSTATE `40001` where Read Committed would have carried on, and under `SERIALIZABLE` the error can arrive on any statement including `COMMIT`. Without a loop that reruns the whole transaction from `BEGIN` (reads included) you have swapped a data bug for random 500s. Keep HTTP calls, emails and publishes out of the retried block. Template in `references/postgresql.md`.
+**Serializable without retries.** PostgreSQL `SERIALIZABLE` and `REPEATABLE READ` abort a transaction with SQLSTATE `40001` where Read Committed would have carried on, and under `SERIALIZABLE` the error can arrive on any statement including `COMMIT`. Without a loop that reruns the whole transaction from `BEGIN` (reads included) you have swapped a data bug for random 500s. Keep HTTP calls, emails and publishes out of the retried block. Template in [references/postgresql.md](references/postgresql.md).
 
 **Inconsistent lock order.** Transfer A to B locks A then B; a concurrent B to A locks B then A. PostgreSQL detects the deadlock and aborts one with `40P01`. Multi-row `UPDATE ... WHERE id = ANY($1)` over overlapping sets does the same, because rows lock in scan order. Fix: lock everything first in key order (`SELECT ... WHERE id = ANY($1) ORDER BY id FOR UPDATE`), then write, and treat `40P01` as retryable.
 
@@ -53,7 +53,7 @@ This is safe under PostgreSQL Read Committed: when a concurrent transaction chan
 
 **Leaked and idle transactions.** An error path that skips `ROLLBACK`, a pool checkout never released, or a slow report holds locks, blocks DDL behind it and, in PostgreSQL, stops vacuum from removing dead rows. Release connections in `finally`. Set `statement_timeout` and `idle_in_transaction_session_timeout` per role or session.
 
-**Polling by id or timestamp over live writes.** A consumer reading `WHERE id > $last_seen` (or `created_at >`) skips rows: sequence values and PostgreSQL `now()` (transaction start time) are assigned before commit, so a row with a smaller id can become visible after the consumer moved past it. Fix: an outbox or jobs table with explicit status, claimed with `FOR UPDATE SKIP LOCKED`, or change data capture. Keyset pagination for people browsing is fine; this is about consumers that must see every row.
+**Polling by id or timestamp over live writes.** A consumer reading `WHERE id > $last_seen` (or `created_at >`) skips rows, because sequence values and PostgreSQL `now()` are assigned before commit and a smaller id can become visible after the consumer has moved past it. Claim rows by status instead (job queue in [references/postgresql.md](references/postgresql.md); outbox relay in backend-architecture) or use change data capture. Keyset pagination for people browsing is fine.
 
 **Read-after-write against a replica.** Write to the primary, redirect, read from a replica, show stale data or re-run the action. Route reads that follow a write in the same flow to the primary, or use the engine's session mechanism (D1 Sessions API bookmarks).
 
@@ -71,21 +71,23 @@ This is safe under PostgreSQL Read Committed: when a concurrent transaction chan
 
 **Soft delete breaking uniqueness and filters.** After adding `deleted_at`, `UNIQUE (email)` blocks re-registration, and every query, join or count that forgets `deleted_at IS NULL` resurrects deleted data. Fix: a partial unique index `WHERE deleted_at IS NULL`, and the filter in one view or repository function rather than at each call site. Consider an archive table instead.
 
-**Missing tenant scoping.** `SELECT * FROM invoices WHERE id = $1` in a multi-tenant schema returns another tenant's invoice for a guessed id. Every query on tenant-owned data filters by a tenant id taken from the authenticated session, never from the request. Carry `tenant_id` into child tables with composite foreign keys (`FOREIGN KEY (tenant_id, invoice_id) REFERENCES invoices (tenant_id, id)`, which needs `UNIQUE (tenant_id, id)` on the parent) so rows cannot point across tenants. PostgreSQL row-level security has sharp edges; see `references/postgresql.md`.
+**Missing tenant scoping.** `SELECT * FROM invoices WHERE id = $1` in a multi-tenant schema returns another tenant's invoice for a guessed id. Every query on tenant-owned data filters by a tenant id taken from the authenticated session, never from the request. Carry `tenant_id` into child tables with composite foreign keys (`FOREIGN KEY (tenant_id, invoice_id) REFERENCES invoices (tenant_id, id)`, which needs `UNIQUE (tenant_id, id)` on the parent) so rows cannot point across tenants. PostgreSQL row-level security has sharp edges; see [references/postgresql.md](references/postgresql.md).
 
-**SQLite defaults left in place.** Non-`STRICT` tables let an `INTEGER` column hold `'abc'`. A non-integer `PRIMARY KEY` without `NOT NULL` accepts NULL. Foreign keys are unenforced unless every connection runs `PRAGMA foreign_keys = ON` (D1 enforces them by default).
+**SQLite defaults left in place.** Non-`STRICT` tables let an `INTEGER` column hold `'abc'`. A `PRIMARY KEY` other than `INTEGER PRIMARY KEY` accepts NULL unless it is declared `NOT NULL` or the table is `STRICT` or `WITHOUT ROWID`. Foreign keys are unenforced unless every connection runs `PRAGMA foreign_keys = ON` (D1 enforces them by default).
+
+**D1 table rebuild that empties child tables.** D1 cannot turn foreign keys off, so a rebuild (create `new_x`, copy, `DROP TABLE x`, rename) relies on `PRAGMA defer_foreign_keys = true`. That defers the checks, not the actions: the `DROP TABLE` deletes every parent row first, which deletes every `ON DELETE CASCADE` child and nulls every `ON DELETE SET NULL` column, and the migration succeeds. Save and restore those child rows in the same migration ([references/sqlite-d1.md](references/sqlite-d1.md)).
 
 ### Migrations
 
 **DDL stuck in the lock queue.** Most PostgreSQL `ALTER TABLE` forms take `ACCESS EXCLUSIVE`, including instant ones such as adding a nullable column or renaming. If any transaction holds a lock on the table, the `ALTER` waits, and every query that arrives after it queues behind the `ALTER`. A metadata-only change takes the application down. Fix: `SET lock_timeout` for the migration so it gives up quickly, retry it, and check `pg_stat_activity` for long transactions first.
 
-**SET NOT NULL on a populated table.** Scans the whole table under `ACCESS EXCLUSIVE`. Fix on PostgreSQL 12+: add `CHECK (col IS NOT NULL) NOT VALID`, `VALIDATE CONSTRAINT` (which takes only `SHARE UPDATE EXCLUSIVE`), then `SET NOT NULL`, which skips the scan because the valid check proves it, then drop the check. Foreign keys and other checks use the same `NOT VALID` then `VALIDATE` split. Not a problem: `ADD COLUMN ... NOT NULL DEFAULT <constant>` on PostgreSQL 11+ stores the default in the catalog without a rewrite. A volatile default (`clock_timestamp()`, `gen_random_uuid()`) does rewrite the table.
+**SET NOT NULL on a populated table.** Scans the whole table under `ACCESS EXCLUSIVE`. Fix: add `CHECK (col IS NOT NULL) NOT VALID`, `VALIDATE CONSTRAINT` (which takes only `SHARE UPDATE EXCLUSIVE`), then `SET NOT NULL`, which skips the scan because the valid check proves it, then drop the check. Foreign keys and other checks use the same `NOT VALID` then `VALIDATE` split. Not a problem: `ADD COLUMN ... NOT NULL DEFAULT <constant>` stores the default in the catalog without a rewrite. A volatile default (`clock_timestamp()`, `gen_random_uuid()`) does rewrite the table.
 
-**Rewrites that look small.** `ALTER COLUMN ... TYPE` rewrites the table and rebuilds indexes unless the old type is binary-coercible to the new one; `integer` to `bigint` is a full rewrite. Add a new column, dual-write, backfill, swap.
+**Rewrites that look small.** `ALTER COLUMN ... TYPE` rewrites the table and its indexes; a binary-coercible change (`varchar(n)` to `text`) skips the table rewrite but may still rebuild indexes, and `integer` to `bigint` is a full rewrite. Add a new column, dual-write, backfill, swap.
 
 **Blocking index builds.** Plain `CREATE INDEX` blocks writes for the whole build. Use `CREATE INDEX CONCURRENTLY`, which cannot run inside a transaction block, so that migration must opt out of the runner's transaction wrapper. A failed concurrent build leaves an `INVALID` index that still slows writes; drop it and retry. For a new unique constraint, build the unique index concurrently, then `ADD CONSTRAINT ... UNIQUE USING INDEX`.
 
-**Rename or drop in the same release as the code change.** During a rolling deploy old and new code run together, and the old code still queries the old column. Dropping a column that running code or an ORM's cached column list still selects fails the same way. Use expand and contract across releases (`references/patterns.md`).
+**Rename or drop in the same release as the code change.** During a rolling deploy old and new code run together, and the old code still queries the old column. Dropping a column that running code or an ORM's cached column list still selects fails the same way. Use expand and contract across releases ([references/patterns.md](references/patterns.md)).
 
 **Backfill in one statement.** `UPDATE users SET email_normalized = lower(email)` over a large table in one transaction locks every row it touches until the end, produces the table's worth of WAL and replica lag at once, bloats the table, and starts over from zero if it fails. Backfill in key-ordered batches, one transaction each, idempotent (`WHERE new_col IS NULL`), resumable from a stored cursor, throttled, and run as a job separate from the schema migration.
 
@@ -95,7 +97,7 @@ This is safe under PostgreSQL Read Committed: when a concurrent transaction chan
 
 **N+1.** A list endpoint loads 50 orders, then lazily loads each customer and each order's items: over 100 queries. Invisible in tests, slow in production, and on D1 each query is a round trip. Load each relation with one join or one `WHERE id = ANY($1)` / `IN (...)` query, and assert query counts in tests for list endpoints.
 
-**OFFSET pagination over live data.** `ORDER BY created_at DESC LIMIT 20 OFFSET 40` repeats or skips rows when rows are inserted or deleted between requests, and the server still reads every skipped row. Sorting on a non-unique column with no tiebreaker makes page order arbitrary. Use keyset pagination with a unique tiebreaker, backed by a matching index (`references/patterns.md`).
+**OFFSET pagination over live data.** `ORDER BY created_at DESC LIMIT 20 OFFSET 40` repeats or skips rows when rows are inserted or deleted between requests, and the server still reads every skipped row. Sorting on a non-unique column with no tiebreaker makes page order arbitrary. Use keyset pagination with a unique tiebreaker, backed by a matching index ([references/patterns.md](references/patterns.md)).
 
 **Unindexed foreign keys.** PostgreSQL does not index the referencing columns of a foreign key, and SQLite recommends indexing them for the same reason: every parent delete or key update scans the child table, per row and per cascade level. Index foreign key columns unless the parent is never deleted or re-keyed and the child is never looked up by parent.
 
@@ -147,8 +149,8 @@ Schema change on a live table: if the previous release breaks against the new sc
 
 ## References
 
-- `references/patterns.md`: read when writing a guarded status transition, idempotent insert, keyset pagination, expand-contract migration or batched backfill.
-- `references/postgresql.md`: read before writing or reviewing PostgreSQL migrations, locking, isolation levels, retry loops, job queues, row-level security or pool settings.
-- `references/sqlite-d1.md`: read for any SQLite or Cloudflare D1 work: connection pragmas, write locking, types and dates, ALTER TABLE limits, D1 batch semantics, limits, replicas and retries.
+- [references/patterns.md](references/patterns.md): read when writing a guarded status transition, idempotent insert, keyset pagination, expand-contract migration or batched backfill.
+- [references/postgresql.md](references/postgresql.md): read before writing or reviewing PostgreSQL migrations, locking, isolation levels, retry loops, job queues, row-level security or pool settings.
+- [references/sqlite-d1.md](references/sqlite-d1.md): read for any SQLite or Cloudflare D1 work: connection pragmas, write locking, types and dates, ALTER TABLE limits, D1 batch semantics, limits, replicas and retries.
 
 Related skills: security-engineering for authorization and injection beyond SQL, backend-architecture for idempotency, outbox and reconciliation across services, performance-benchmarking for measuring query changes.

@@ -73,7 +73,7 @@ For existing text columns, normalizing both sides with `unixepoch(expires_at) > 
 
 `ADD COLUMN` cannot add `PRIMARY KEY` or `UNIQUE`, cannot default to `CURRENT_TIMESTAMP` or an expression, needs a non-NULL default when `NOT NULL`, and (with foreign keys on) needs a NULL default for a `REFERENCES` column. From 3.37.0 an added `CHECK` is tested against existing rows. `DROP COLUMN` fails if the column is indexed, unique, part of the primary key, a foreign key, or used by a view, trigger, generated column or another check.
 
-Anything else is the documented table rebuild: disable foreign keys, begin, create `new_x`, copy rows, drop `x`, rename `new_x` to `x`, recreate indexes, triggers and views, run `PRAGMA foreign_key_check`, commit, re-enable foreign keys. Create under the new name and rename into place; the reverse order corrupts references. Because `PRAGMA foreign_keys` is ignored inside a transaction, the disable must happen before `BEGIN`.
+Anything else is the documented table rebuild: disable foreign keys, begin, create `new_x`, copy rows, drop `x`, rename `new_x` to `x`, recreate indexes, triggers and views, run `PRAGMA foreign_key_check`, commit, re-enable foreign keys. Create under the new name and rename into place; the reverse order corrupts references. Because `PRAGMA foreign_keys` is ignored inside a transaction, the disable must happen before `BEGIN`. With foreign keys still on, the `DROP TABLE` would run every child's `ON DELETE` action. D1 cannot turn them off; its recipe is under Cloudflare D1 below.
 
 ## Cloudflare D1
 
@@ -156,10 +156,29 @@ await env.DB.prepare("SELECT id, email FROM users WHERE id IN (SELECT value FROM
 
 **Throughput.** Each database is single-threaded and runs queries one at a time, so throughput is roughly the inverse of average query time, and one slow scan delays every request. Excess concurrent requests queue, then fail as overloaded. Index for every hot query and check `meta.rows_read`.
 
-**Foreign keys.** D1 enforces foreign keys by default and does not let you switch enforcement off outside a single transaction. Migrations that rebuild a table start with `PRAGMA defer_foreign_keys = true`, which postpones checks until the end of that transaction.
+**Foreign keys and table rebuilds.** D1 enforces foreign keys and runs every query and migration inside a transaction, where SQLite ignores `PRAGMA foreign_keys`, so enforcement cannot be switched off. The D1 docs point migrations at `PRAGMA defer_foreign_keys = true` instead. That pragma defers constraint checks to the end of the transaction; it does not stop foreign key actions. `DROP TABLE` on a parent first runs an implicit `DELETE` of every row, so the standard rebuild deletes every `ON DELETE CASCADE` child (and whatever cascades from those), nulls every `ON DELETE SET NULL` column, and commits without an error. Before rebuilding a table on D1, run `PRAGMA foreign_key_list(<t>)` on every table to find the ones that reference it, and follow cascades to their children. If any reference has an `ON DELETE` action, save those rows in the same migration and put them back after the rename:
+
+```sql
+PRAGMA defer_foreign_keys = true;
+CREATE TABLE keep_order_items AS SELECT * FROM order_items;         -- ON DELETE CASCADE child
+CREATE TABLE keep_shipments AS SELECT id, order_id FROM shipments;  -- ON DELETE SET NULL child
+CREATE TABLE orders_new (id INTEGER PRIMARY KEY, total_minor INTEGER NOT NULL) STRICT;
+INSERT INTO orders_new (id, total_minor) SELECT id, total_minor FROM orders;
+DROP TABLE orders;                                                 -- empties order_items, nulls shipments.order_id
+ALTER TABLE orders_new RENAME TO orders;
+-- recreate the indexes, triggers and views of orders here
+INSERT INTO order_items SELECT * FROM keep_order_items
+ WHERE id NOT IN (SELECT id FROM order_items);                     -- rows with a NULL order_id were never deleted
+UPDATE shipments SET order_id = (SELECT k.order_id FROM keep_shipments k WHERE k.id = shipments.id);
+DROP TABLE keep_order_items;
+DROP TABLE keep_shipments;
+PRAGMA foreign_key_check;
+```
+
+Restore parents before their children. The cascade fires `DELETE` triggers on the child tables and the restore fires their `INSERT` and `UPDATE` triggers, so an audit or outbox trigger records deletions that never happened; drop those triggers at the top of the migration and recreate them at the end. Name the columns instead of `SELECT *` when a child has generated columns. Load production-sized data into the local database (`wrangler d1 execute <db> --local --file=<dump.sql>`; `wrangler d1 export <db> --remote --output=<dump.sql>` produces a dump where your data rules allow copying it), run `wrangler d1 migrations apply <db> --local`, and compare the row counts of every child table before and after. Prefer `ALTER TABLE ... ADD`, `RENAME` or `DROP COLUMN` when they can express the change, since they need no rebuild.
 
 **Migrations.** Wrangler records applied files in the `d1_migrations` table. A file that errors is rolled back and earlier files stay applied. A dropped connection during apply is still an unknown outcome, so write each migration to be rerunnable (`IF NOT EXISTS`, guarded data steps) and apply it to a local copy (`wrangler d1 migrations apply <db> --local`) before production.
 
-**Read replication.** Without the Sessions API every query goes to the primary. With `env.DB.withSession(...)`, reads may be served by replicas; the session gives read-your-writes and monotonic reads within itself. Across requests, return `session.getBookmark()` to the client and start the next request's session from it, or a user can write and then read older data. Start from `"first-primary"` when the first read must be current. Writes always go to the primary.
+**Read replication.** Replicas exist only after read replication is enabled on the database (dashboard, or the REST API with `"read_replication": {"mode": "auto"}`); turning it off takes up to 24 hours to stop replicas serving. Without the Sessions API every query goes to the primary. With `env.DB.withSession(...)`, reads may be served by replicas. `withSession()` with no argument means `"first-unconstrained"`: the first query, read or write, may go to any instance. A session gives read-your-writes and monotonic reads within itself. Across requests, return `session.getBookmark()` to the client and start the next request's session from it, or a user can write and then read older data. Start from `"first-primary"` when the first read must be current. Writes always go to the primary.
 
 **Retries.** D1 retries read-only queries (only `SELECT`, `EXPLAIN`, `WITH`) itself. Writes are not retried for you. Errors such as "Network connection lost" on a write leave the outcome unknown; retry only writes that are idempotent by construction (upserts keyed on an idempotency key, guarded updates) with exponential backoff and jitter.

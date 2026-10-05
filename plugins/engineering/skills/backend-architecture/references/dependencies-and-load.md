@@ -12,13 +12,13 @@ Decide per dependency, in one function, what each observation means. The table i
 | --- | --- | --- | --- |
 | DNS failure, connection refused, TLS handshake failure | Not sent | Yes | Yes |
 | Timeout after the request was written, connection reset, socket closed on a reused keep-alive connection | Unknown | No | Yes, or reconcile first |
-| 500, 502, 504, unparsable body | Unknown | No | Yes, or reconcile first |
+| 500, 502, 504, unparsable body | Unknown | No | Yes, unless the provider stores errors under the key (Stripe does for 500); then reconcile by lookup |
 | 503 or 429 | Not processed only if the provider documents it | Only if documented | Yes, after `Retry-After` |
 | 400, 401, 403, 404, 422 | Definitive failure | No | No, fix the request |
 | 409 "same key in progress" | Another attempt running | No | Yes, after a delay |
 | 2xx | Success | No | No |
 
-Unknown is its own state in your data. It is resolved by a lookup or by a keyed retry, never by assuming failure.
+Unknown is its own state in your data. It is resolved by a lookup or by a keyed retry, never by assuming failure. A keyed retry only helps when the provider has not stored the failure under that key (idempotency.md).
 
 ## Deadlines
 

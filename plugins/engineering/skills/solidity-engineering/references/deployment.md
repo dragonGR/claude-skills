@@ -8,8 +8,8 @@ A deployment is a state change you cannot take back. Treat it like a database mi
 
 ```toml
 [profile.default]
-solc_version = "0.8.33"
-evm_version = "prague"
+solc_version = "0.8.37"
+evm_version = "osaka"
 optimizer = true
 optimizer_runs = 200
 via_ir = true
@@ -20,7 +20,8 @@ polygon = "${POLYGON_RPC_URL}"
 amoy = "${AMOY_RPC_URL}"
 ```
 
-- Pin `solc_version` and set `evm_version = "prague"`. Recent compilers default to `osaka`, which Polygon does not run.
+- Pin `solc_version` to a release with no known bugs that affect your settings, and check it against the compiler's `docs/bugs_by_version.json` before every deployment. 0.8.28 to 0.8.33 miscompile `delete` on transient variables under `via_ir` with a Cancun-or-later target (fixed in 0.8.34).
+- Set `evm_version` explicitly to the newest fork Polygon has activated. Polygon and Amoy have run Osaka's only new opcode, `clz`, since the Lisovo hardfork (March 2026), so `osaka` fits today. Leaving it to the compiler default means a compiler upgrade can target a fork Polygon has not activated yet.
 - Choose `optimizer_runs` for the contract: lower values give smaller code, higher values cheaper calls. Whatever you choose, tests, deployment and verification must all use the same settings.
 - RPC URLs often contain an API key. Keep them in the environment, never in the repository.
 - Use a dedicated RPC provider for deployments. Public endpoints rate-limit and drop transactions under load.
@@ -119,7 +120,7 @@ Commit a deployment record per network: contract names, addresses, transaction h
 ## Mainnet checklist
 
 - Tests, fuzz, invariants and fork tests pass on the tagged commit.
-- `evm_version` is `prague`, compiler pinned, settings identical to the tested build.
+- Compiler pinned to a version with no known bugs for these settings, `evm_version` set explicitly to a fork Polygon has activated, settings identical to the tested build.
 - Configuration file reviewed by a second person; chain id check in the script.
 - Rehearsed on a local fork and on Amoy, with the check script passing.
 - Deployer uses a hardware wallet or encrypted keystore and holds no lasting roles.

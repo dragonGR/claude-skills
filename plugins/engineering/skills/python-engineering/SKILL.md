@@ -12,10 +12,10 @@ Python fails quietly. A default argument shared by every call, a task garbage-co
 
 ## Before you judge or change anything
 
-- Python version: `requires-python`, the CI matrix, the Docker base image. Several behaviors below changed in 3.11, 3.12 or 3.14. Do not use syntax or stdlib features newer than the declared minimum.
+- Python version: `requires-python`, the CI matrix, the Docker base image. Several behaviors below changed in 3.11, 3.12 or 3.14. Do not use syntax or stdlib features newer than the declared minimum. In early October 2026 the supported CPython lines are 3.11 to 3.14, with 3.15.0 due on 2026-10-09 (PEP 790); 3.10 reached end of life on 2026-10-01. For stdlib code that parses hostile input (`tarfile`, `zipfile`, `email`, `http`), the patch release matters as much as the minor version.
 - Sync or async, and the server. FastAPI runs `async def` routes and dependencies on the event loop and plain `def` ones in a threadpool, so the same blocking call is harmless in one and stalls the worker in the other.
 - Process model: worker count, threads per worker, whether the server imports the app before forking (gunicorn `--preload`, Celery prefork, `multiprocessing` with fork).
-- Major versions of Pydantic (v1, v2, or v2 with `pydantic.v1` imports) and SQLAlchemy (1.x `Query` or 2.0 `select`). Advice for one is wrong for the other.
+- Major versions of Pydantic (v1, v2, or v2 with `pydantic.v1` imports) and SQLAlchemy (1.x `Query` or 2.x `select`). Advice for one is wrong for the other.
 - For a claimed bug: the input or interleaving that triggers it, and whether a validator, type, lock or later check already stops it. If you cannot name the path, drop the claim.
 
 ## Failure catalogue
@@ -37,13 +37,11 @@ def build_digest(user: User, alerts: list[Alert] | None = None) -> list[Alert]:
     return alerts
 ```
 
-The same sharing happens with class attributes (`class Cart: items = []`). `@dataclass` rejects unhashable defaults (since 3.11, any unhashable value, not only `list`/`dict`/`set`), but it accepts an instance of an ordinary class, which is hashable by identity and therefore shared; use `field(default_factory=...)`. Pydantic deep-copies non-hashable defaults per instance, so `tags: list[str] = []` on a Pydantic model is fine and not a finding.
+The same sharing happens with class attributes (`class Cart: items = []`). `@dataclass` rejects any unhashable default, but it accepts an instance of an ordinary class, which is hashable by identity and therefore shared; use `field(default_factory=...)`. Pydantic deep-copies non-hashable defaults per instance, so `tags: list[str] = []` on a Pydantic model is fine and not a finding.
 
-**Late-binding closures.** A lambda or nested function created in a loop looks up the loop variable when it runs, not when it was created, so every callback sees the last value. Bind at creation: `lambda amount, rate=rate: amount * rate`, `functools.partial(apply_rate, rate)`, or a factory function.
+**Loop closures and in-loop mutation.** Closures created in a loop see the loop variable's last value (bind it with a default argument or `functools.partial`). Removing from a list while iterating over it skips elements without any error; iterate over a copy or build a new list.
 
 **Consumed iterators.** Generators, `map`, `filter`, `zip` and file objects can be read once. `if not any(gen): return` followed by `for x in gen` silently drops the element `any` consumed. A generator passed to two functions gives the second nothing. `bool(gen)` is always true, so `if gen:` is not an emptiness check. Materialize with `list()` when you read twice or test for emptiness.
-
-**Mutating while iterating.** Removing from a list inside `for x in items` skips the element after each removal without any error. Changing a dict's size during iteration raises `RuntimeError`. Iterate over a copy or build a new collection.
 
 **`assert` as a guard.** `python -O` strips asserts. `assert order.owner_id == user.id` is not an authorization check. Raise explicitly for anything guarding authority, money or data shape.
 
@@ -51,7 +49,7 @@ The same sharing happens with class attributes (`class Cart: items = []`). `@dat
 
 ### Errors
 
-**Bare `except:` or `except BaseException`.** Catches `KeyboardInterrupt`, `SystemExit` and `asyncio.CancelledError`. A retry loop wrapped this way keeps retrying after shutdown or a timeout cancelled it, which is how deploys hang. `except Exception` does not catch `CancelledError` (a `BaseException` subclass since 3.8), so at a boundary it is the correct broad catch, not a finding.
+**Bare `except:` or `except BaseException`.** Catches `KeyboardInterrupt`, `SystemExit` and `asyncio.CancelledError`. A retry loop wrapped this way keeps retrying after shutdown or a timeout cancelled it, which is how deploys hang. `except Exception` does not catch `CancelledError` (a `BaseException` subclass), so at a boundary it is the correct broad catch, not a finding.
 
 **Swallowing at the wrong layer.** `except Exception: return None` or `pass` deep in the stack turns a failure into a plausible value: a missing price becomes zero, a failed write reports success. Catch the narrowest exception you can act on, where you can act on it. Broad catches belong at the request, job or task boundary, where they log with the traceback and decide the response or retry.
 
@@ -88,9 +86,9 @@ async with asyncio.TaskGroup() as tg:
         tg.create_task(enrich_bounded(row))
 ```
 
-For inputs too large to hold as tasks, use a fixed pool of workers reading a bounded `asyncio.Queue` (`references/async.md`).
+For inputs too large to hold as tasks, use a fixed pool of workers reading a bounded `asyncio.Queue` ([references/async.md](references/async.md)).
 
-**No deadline.** An `await` on a network read with no timeout can wait forever while holding a semaphore slot or pool connection. Wrap with `async with asyncio.timeout(seconds)` (3.11+) or `asyncio.wait_for`; both cancel the inner work and raise the builtin `TimeoutError` on 3.11+ (`asyncio.TimeoutError` before). A timeout is an unknown outcome: the remote side may have applied the write.
+**No deadline.** An `await` on a network read with no timeout can wait forever while holding a semaphore slot or pool connection. Wrap with `async with asyncio.timeout(seconds)` or `asyncio.wait_for`; both cancel the inner work and raise the builtin `TimeoutError` (`asyncio.TimeoutError` is an alias of it). A timeout is an unknown outcome: the remote side may have applied the write.
 
 **`threading.local` in async code.** Every coroutine on the loop thread shares it, so a request id, tenant or DB session stored there leaks between concurrent requests. Use a module-level `contextvars.ContextVar`.
 
@@ -120,7 +118,7 @@ For inputs too large to hold as tasks, use a fixed pool of workers reading a bou
 
 ### Security at the boundary
 
-**Code-executing deserializers.** `pickle` and anything built on it (`shelve`, `joblib`, `pandas.read_pickle`), `yaml.load` with `Loader=yaml.Loader` or `UnsafeLoader`, `eval`/`exec` on input. A pickled value in Redis or on a shared volume is code execution for anyone who can write there. Use JSON, `yaml.safe_load`, or sign with `hmac` and verify before loading.
+**Code-executing deserializers.** `pickle` and anything built on it (`shelve`, `joblib`, `pandas.read_pickle`), `yaml.unsafe_load` or `yaml.load` with `yaml.Loader` or `UnsafeLoader`, `eval`/`exec` on input. A pickled value in Redis or on a shared volume is code execution for anyone who can write there. Use JSON, `yaml.safe_load`, or sign with `hmac` and verify before loading.
 
 **Shell commands from strings.** `subprocess.run(f"convert {name} out.png", shell=True)`, `os.system`, `os.popen`. Pass an argument list with the default `shell=False`, put `--` before user-supplied positional arguments so `-rf` is not read as an option, and set `timeout=` and `check=True` (the default `check=False` ignores non-zero exits).
 
@@ -137,7 +135,7 @@ def safe_child(base: Path, name: str) -> Path:
     return target
 ```
 
-**Archive extraction.** Before 3.14, `tarfile` extraction trusts member paths and links by default. Pass `filter="data"` (3.12+, backported to some older security releases) and cap member count and total uncompressed size for any archive, zip included.
+**Archive extraction.** Before 3.14, `tarfile` extraction trusts member paths and links by default; 3.14 defaults to the `data` filter. On older versions pass `filter="data"` (3.12+, and 3.11.4+ on the 3.11 line). The filter is a check written in Python, not a sandbox: crafted links got past it until 3.11.13, 3.12.11, 3.13.4 and 3.14.0 (CVE-2025-4517), and further link and hardlink bypasses were published through 2026. Run the newest patch release, extract into a fresh `tempfile.mkdtemp()` directory, and cap member count and total uncompressed size for any archive, zip included. On a patch release older than the CVE-2025-4517 fix, extracting an untrusted tar is a finding even with the filter.
 
 **Predictable temp paths.** `tempfile.mktemp()` or a fixed `/tmp/report.csv` lets another local process create or symlink the path first, and makes concurrent workers overwrite each other. Use `NamedTemporaryFile`, `mkstemp` (mode 0600) or `TemporaryDirectory`.
 
@@ -151,17 +149,17 @@ def safe_child(base: Path, name: str) -> Path:
 
 **Import-time side effects.** Connecting to databases, reading secrets, starting threads or calling APIs at import makes test collection slow and order-dependent, breaks tools that import for `--help`, and under a pre-fork server shares one socket across every worker. Create resources in a factory or lifespan hook called by the entry point.
 
-**Connections inherited across fork.** Pools created before gunicorn `--preload`, Celery prefork or `multiprocessing` fork are copied into each child; two processes then share a socket and read each other's results. Create engines and clients after fork, or call SQLAlchemy `engine.dispose(close=False)` in the child initializer (1.4.33+).
+**Connections inherited across fork.** Pools created before gunicorn `--preload`, Celery prefork or `multiprocessing` fork are copied into each child; two processes then share a socket and read each other's results. Create engines and clients after fork, or call SQLAlchemy `engine.dispose(close=False)` in the child initializer (1.4.33+). gunicorn and Celery call `os.fork` themselves, but `multiprocessing` and `ProcessPoolExecutor` fork by default on Linux only before 3.14. From 3.14 the default start method there is `forkserver`, which avoids inherited sockets, but every target and argument must pickle (a lambda raises `PicklingError`), and globals assigned under `if __name__ == "__main__":` are unset in the workers. Code that worked by accident under fork breaks on upgrade.
 
 **Circular imports.** Show up as `ImportError: cannot import name` or an `AttributeError` on a partially initialized module, often only for one entry point, so tests pass and production fails. Fix the dependency direction (move shared types down a layer); use `if TYPE_CHECKING:` for annotation-only cycles; a function-local import is the last resort.
 
 **Per-process state in web workers.** A module-level dict used as a rate limiter, idempotency store, session store, lock or cache exists once per process: with four workers on three pods there are twelve copies, limits multiply, dedupe misses, everything resets on deploy. Shared state lives in the database or Redis. Module globals written per request also leak between users on the same worker.
 
-**Thread-safety by GIL folklore.** The GIL makes single bytecodes atomic, not your operations. `counter += 1`, `if key not in d: d[key] = build()` and read-modify-write on shared objects race under FastAPI's threadpool, `ThreadPoolExecutor` or gunicorn threads. Free-threaded builds (available from 3.13) remove the incidental serialization entirely, and even there the docs recommend explicit locks over relying on built-in types' internal locking. Guard shared mutable state with `threading.Lock` or don't share it. A SQLAlchemy `Session` and most client objects with per-call state are single-thread.
+**Thread-safety by GIL folklore.** The GIL makes single bytecodes atomic, not your operations. `counter += 1`, `if key not in d: d[key] = build()` and read-modify-write on shared objects race under FastAPI's threadpool, `ThreadPoolExecutor` or gunicorn threads. Free-threaded builds (experimental in 3.13, officially supported from 3.14) remove the incidental serialization entirely, and even there the docs recommend explicit locks over relying on built-in types' internal locking. Guard shared mutable state with `threading.Lock` or don't share it. A SQLAlchemy `Session` and most client objects with per-call state are single-thread.
 
 ### Pydantic and SQLAlchemy
 
-Details and migration tables in `references/pydantic-sqlalchemy.md`.
+Details and migration tables in [references/pydantic-sqlalchemy.md](references/pydantic-sqlalchemy.md).
 
 **Pydantic v1 habits in v2.** `Optional[X]` without a default is now required; ints no longer coerce to `str`; `.dict()`, `parse_obj`, `@validator`, `class Config` and `orm_mode` are renamed or deprecated. Extra keys are ignored by default, so privileged input models need `ConfigDict(extra="forbid")`.
 
@@ -175,9 +173,9 @@ Details and migration tables in `references/pydantic-sqlalchemy.md`.
 
 **Unlocked installs.** `requests>=2` resolves differently per build, so a bad upstream release ships with no code change. Install from a lock file with hashes (`uv sync --locked`, pip-tools output installed with `--require-hashes`).
 
-**Typosquats and index confusion.** A package name typed from memory can be a malicious lookalike; check the PyPI page, source repo and maintainers before adding. pip treats `--extra-index-url` as equal to the main index and takes the highest version, so a public package with your internal package's name wins. Resolve internal names only from the internal index.
+**Typosquats and index confusion.** A package name typed from memory can be a malicious lookalike; check the PyPI page, source repo and maintainers before adding. pip treats `--extra-index-url` as equal to the main index and takes the highest version, so a public package with your internal package's name wins. Resolve internal names only from the internal index. uv's default `index-strategy = "first-index"` stops at the first index that has the name, so it is safe when the internal index is searched before PyPI. uv treats the default index as lowest priority, so with `--index-url internal --extra-index-url pypi` PyPI is searched first and the attack works again. Flag uv projects that set an `unsafe-*` strategy or put PyPI ahead of the internal index; pinning internal packages through `[tool.uv.sources]` to an index marked `explicit = true` closes it.
 
-**Test state leaking.** Module- or session-scoped fixtures returning mutable objects, `os.environ[...] =` without restore, an `lru_cache`d `get_settings()` built from the first test's environment, and committed DB rows make tests order-dependent. Patching `requests.post` does not affect a module that did `from requests import post`; patch where the name is looked up. Details in `references/testing.md`.
+**Test state leaking.** Module- or session-scoped fixtures returning mutable objects, `os.environ[...] =` without restore, an `lru_cache`d `get_settings()` built from the first test's environment, and committed DB rows make tests order-dependent. Patching `requests.post` does not affect a module that did `from requests import post`; patch where the name is looked up. Details in [references/testing.md](references/testing.md).
 
 ## Decision rules
 
@@ -213,10 +211,10 @@ Details and migration tables in `references/pydantic-sqlalchemy.md`.
 
 ## References
 
-- `references/async.md`: read when writing or reviewing asyncio code: supervised background tasks, bounded fan-out, timeouts, cancellation, blocking calls, shutdown.
-- `references/boundaries.md`: read when code handles untrusted input or the outside world: HTTP clients, subprocess, SQL, file paths, archives, uploads, deserialization, settings and logging.
-- `references/money-and-time.md`: read for any code computing money, rates, proration, rounding, timestamps, time zones or durations.
-- `references/pydantic-sqlalchemy.md`: read when using Pydantic models or SQLAlchemy sessions, or migrating Pydantic v1 to v2 or SQLAlchemy 1.x to 2.0.
-- `references/testing.md`: read when writing pytest fixtures or mocks, or chasing tests that pass alone and fail in the suite.
+- [references/async.md](references/async.md): read when writing or reviewing asyncio code: supervised background tasks, bounded fan-out, timeouts, cancellation, blocking calls, shutdown.
+- [references/boundaries.md](references/boundaries.md): read when code handles untrusted input or the outside world: HTTP clients, subprocess, SQL, file paths, archives, uploads, deserialization, settings and logging.
+- [references/money-and-time.md](references/money-and-time.md): read for any code computing money, rates, proration, rounding, timestamps, time zones or durations.
+- [references/pydantic-sqlalchemy.md](references/pydantic-sqlalchemy.md): read when using Pydantic models or SQLAlchemy sessions, or migrating Pydantic v1 to v2 or SQLAlchemy 1.x to 2.x.
+- [references/testing.md](references/testing.md): read when writing pytest fixtures or mocks, or chasing tests that pass alone and fail in the suite.
 
-Related skills: security-engineering for authorization, SSRF and threat modelling; database-engineering for transactions, locking and migrations; backend-architecture for idempotency, outbox and reconciliation; test-engineering for test strategy; performance-benchmarking before optimizing.
+Related skills: security-engineering for authorization, SSRF and threat modeling; database-engineering for transactions, locking and migrations; backend-architecture for idempotency, outbox and reconciliation; test-engineering for test strategy; performance-benchmarking before optimizing.

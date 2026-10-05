@@ -42,7 +42,7 @@ Compare it with the current branch. To put the branch back where it was, `git re
 
 **After `commit --amend`.** The pre-amend commit is the previous reflog entry of the branch (`git reflog show <branch>`, the line before `commit (amend)`).
 
-**Deleted branch.** `git branch -D` prints the tip it deleted. If that output is gone, search the reflog for the branch's last commit (`git reflog | rg '<branch name>'`), then recreate it: `git branch <name> <sha>`.
+**Deleted branch.** `git branch -D` prints the tip it deleted (`was <sha>`). If that output is gone, so is the branch's own reflog; only HEAD's reflog remembers it. Search it with `git reflog | grep -A1 'moving from <branch> to'`. The SHA on the matching `checkout: moving from <branch> to <other>` line is where HEAD went, not the branch tip; the tip is the entry printed below it (`HEAD@{n+1}` when the match is `HEAD@{n}`). Check it with `git log --oneline -n 5 <sha>`, then `git branch <name> <sha>`. A branch that was never checked out is not in HEAD's reflog; look for its commits with `git fsck --unreachable`.
 
 **Detached HEAD commits.** `git reflog` shows them as `commit:` entries made while detached. Create a branch at the last one.
 

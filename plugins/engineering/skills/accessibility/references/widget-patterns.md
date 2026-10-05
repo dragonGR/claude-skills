@@ -62,7 +62,7 @@ export function Modal({ open, onClose, title, children }: ModalProps) {
 }
 ```
 
-The parent owns `open`; the `close` event keeps it in sync when the browser closes the dialog itself. Do not render `<Modal>` conditionally.
+The parent owns `open`; the `close` event keeps it in sync when the browser closes the dialog itself. Do not render `<Modal>` conditionally or inside `AnimatePresence`; animate it in CSS with `@starting-style` and `transition-behavior: allow-discrete` (the `react-motion` skill has the pattern).
 
 Edge cases to check:
 
@@ -107,7 +107,7 @@ Keyboard (APG, horizontal tabs):
 
 For `aria-orientation="vertical"` tablists, Down and Up replace Right and Left.
 
-Roles and properties: `role="tablist"` with a name, `role="tab"` on each tab with `aria-selected` and `aria-controls`, `role="tabpanel"` on each panel with `aria-labelledby` pointing at its tab. Only the selected tab has `tabIndex={0}`; the rest have `-1` (roving tabindex), so the tablist is one Tab stop. Give the panel `tabIndex={0}` when it does not start with a focusable element, so Tab reaches its content.
+Roles and properties: `role="tablist"` with a name, `role="tab"` on each tab with `aria-selected` and `aria-controls`, `role="tabpanel"` on each panel with `aria-labelledby` pointing at its tab. Only the selected tab has `tabIndex={0}`; the rest have `-1` (roving tabindex), so the tablist is one Tab stop. Give the panel `tabIndex={0}` when it does not start with a focusable element, so Tab reaches its content. The example below gives every panel `tabIndex={0}`; drop it for panels that start with a focusable element.
 
 APG recommends activating a tab when it receives focus, as long as its panel shows without noticeable latency. If a panel fetches data on selection, use manual activation: arrows move focus, Enter or Space selects.
 
@@ -335,5 +335,5 @@ Failure modes to check in review:
 - Option ids are reused across two comboboxes on the page (hardcoded prefixes instead of `useId`).
 - The number of results is never announced. A polite status region outside the combobox ("7 results") helps; debounce it so it does not speak on every keystroke.
 - Selection happens on hover or on `mousedown`.
-- The popup is portaled to `<body>` and the combobox sits inside an open modal `<dialog>`: the portal is outside the dialog, so it is inert and unclickable. Render the popup inside the dialog.
+- The popup is portaled to `<body>` and the combobox sits inside an open modal `<dialog>`: the portal is outside the dialog, so it is inert and unclickable. Render the popup inside the dialog; if it must escape `overflow` clipping, make it a `popover` element that stays a DOM descendant of the dialog, which puts it in the top layer without moving it out.
 - Async options: while loading, keep `aria-expanded="false"` or show a "Loading" option state; do not leave the active id pointing at an option from the previous result set.

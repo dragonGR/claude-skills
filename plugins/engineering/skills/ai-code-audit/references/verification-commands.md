@@ -5,14 +5,17 @@ Read this when collecting an AI change and checking it against the repository. T
 ## Collect the whole change
 
 ```sh
-base=$(git merge-base HEAD origin/main)
-git diff --stat "$base"...HEAD
-git diff --name-status "$base"...HEAD
-git status --porcelain
-git diff "$base"...HEAD -- '*lock*' 'package.json' 'pyproject.toml' 'Cargo.toml' 'foundry.toml' 'remappings.txt'
+base=$(git merge-base HEAD "$(git rev-parse --abbrev-ref origin/HEAD)")
+git diff --stat "$base"
+git diff --name-status "$base"
+git ls-files --others --exclude-standard
+git diff "$base" -- '*lock*' ':(glob)**/package.json' ':(glob)**/pyproject.toml' ':(glob)**/Cargo.toml' 'foundry.toml' 'remappings.txt'
 ```
 
-- `git status --porcelain` shows uncommitted and untracked files. An agent's real change often sits in an untracked file the diff never shows.
+- `git diff "$base"` compares the working tree with the merge base, so committed, staged and unstaged changes all show. `"$base"...HEAD` compares commits only and misses everything not yet committed, which is usually the change you are auditing before calling it done. Use `...HEAD` only for a pushed branch with no local edits. Every command below uses `"$base"` for the same reason.
+- `git ls-files --others --exclude-standard` lists untracked files, which no diff shows. Read each one; an agent's real change often sits in a new file.
+- If `git rev-parse --abbrev-ref origin/HEAD` fails, the clone has no default-branch pointer; name the base branch explicitly.
+- Quote pathspecs so the shell (zsh in particular) does not expand or reject them. A plain `package.json` matches only the repository root; `:(glob)**/package.json` matches it at any depth, root included.
 - Look at deleted (`D`) and renamed (`R`) entries first. Deletions of tests, migrations, checks and config are where the damage hides.
 - For a pull request from someone else, fetch it into a separate worktree (`git worktree add /tmp/audit-pr <branch>`) and audit there.
 
@@ -21,7 +24,7 @@ git diff "$base"...HEAD -- '*lock*' 'package.json' 'pyproject.toml' 'Cargo.toml'
 For every dependency the change adds or bumps:
 
 ```sh
-git diff "$base"...HEAD -- package.json pyproject.toml requirements*.txt Cargo.toml | rg '^\+'
+git diff "$base" -- ':(glob)**/package.json' ':(glob)**/pyproject.toml' ':(glob)**/requirements*.txt' ':(glob)**/Cargo.toml' | rg '^\+'
 ```
 
 Then check each new name against its registry:
@@ -32,7 +35,7 @@ curl -s "https://pypi.org/pypi/<name>/json" | jq '{name: .info.name, home: .info
 cargo info <name>
 ```
 
-Red flags: the package was created recently, has one release, has a name one character away from a popular package, has no repository or a repository that does not match, or has install scripts. If the model named the package and you cannot find it in the project's docs, an upstream README or the lockfile of a well-known project using it, treat it as invented until shown otherwise.
+Red flags: the package was created recently, has one release, has a name one character away from a popular package, has no repository or a repository that does not match, or has install scripts. npm 12 and later skip dependency install scripts unless the package is listed in `allowScripts` in `package.json`, so a change that adds an entry there, or passes `--dangerously-allow-all-scripts`, is approving third-party code to run on every install; check what the script does. If the model named the package and you cannot find it in the project's docs, an upstream README or the lockfile of a well-known project using it, treat it as invented until shown otherwise.
 
 Confirm the installed version is the one the code assumes:
 
@@ -47,11 +50,13 @@ Find every external symbol the change calls and locate it in the installed sourc
 
 ```sh
 rg -n 'export (declare )?(async )?(function|const|class|interface|type) <symbol>\b' node_modules/<pkg> -g '*.d.ts'
+rg -n -F '<member>' node_modules/<pkg> -g '*.d.ts'
 python -c "import inspect, <module>; print(inspect.signature(<module>.<function>))"
 rg -n 'pub (async )?fn <symbol>\b' ~/.cargo/registry/src/*/<crate>-<version>/src
 rg -n 'function <symbol>\(' lib/<dependency>/contracts
 ```
 
+- The first pattern finds only top-level exports. Methods and options (`fs.promises.exists`, `prisma.$upsertMany`, `useQuery({ onSuccess })`) need the second, a fixed-string search for the member name (so `$queryRaw` needs no escaping); then read the enclosing interface to confirm the member belongs to the object the code calls it on.
 - Check options and parameter names, not only the function. Invented options are passed in object literals and type checking may not catch them when the parameter type is loose.
 - Check removed and renamed APIs in the dependency's changelog between the version the code was written for and the version in the lockfile.
 - Run the type checker on the whole project (`npx tsc --noEmit`, `pyright` or `mypy`, `cargo check --all-targets`, `forge build`), not only on changed files.
@@ -59,7 +64,7 @@ rg -n 'function <symbol>\(' lib/<dependency>/contracts
 ## Configuration and environment
 
 ```sh
-git diff "$base"...HEAD | rg -o 'process\.env\.[A-Z0-9_]+|os\.environ(\.get)?\(?\[?"[A-Z0-9_]+"|env::var\("[A-Z0-9_]+"\)|vm\.env\w*\("[A-Z0-9_]+"\)' | sort -u
+git diff "$base" | rg -o "process\.env(\.[A-Z0-9_]+|\[['\"][A-Z0-9_]+['\"]\])|import\.meta\.env\.[A-Z0-9_]+|os\.(getenv|environ\.get)\(['\"][A-Z0-9_]+['\"]|os\.environ\[['\"][A-Z0-9_]+['\"]\]|env::var\(\"[A-Z0-9_]+\"\)|vm\.env\w*\(\"[A-Z0-9_]+\"\)" | sort -u
 ```
 
 For each variable, find where it is set: `.env.example`, deployment manifests, CI workflow files, the secret store's inventory. A variable read in code and set nowhere is a hallucination or a missing deployment step.
@@ -82,7 +87,7 @@ Every column the change queries exists in a migration that runs before it. Every
 Run on the added lines only, so existing debt does not drown the change:
 
 ```sh
-git diff -U0 "$base"...HEAD | rg '^\+' | rg -n \
+git diff -U0 "$base" | rg '^\+' | rg -n \
   -e '\bas any\b' -e 'as unknown as' -e '@ts-(ignore|nocheck|expect-error)' -e 'eslint-disable' \
   -e '# ?type: ?ignore' -e '# ?noqa' -e '# ?pragma: no cover' \
   -e '#\[allow\(' -e '\.unwrap\(\)' -e '\.expect\("' -e 'unimplemented!|todo!' -e '//\s*nolint' \
@@ -91,12 +96,14 @@ git diff -U0 "$base"...HEAD | rg '^\+' | rg -n \
   -e 'continue-on-error' -e '\|\|\s*true\b'
 ```
 
+Untracked files are in no diff, so run the same patterns over them as whole files: `git ls-files -z --others --exclude-standard | xargs -0 -r rg -n -e ...` (`-r` stops `rg` searching the whole tree when there are none).
+
 Then read each hit in context. Some are legitimate (`.unwrap()` on a value that cannot fail, `expect` with a stated invariant); the point is that each one is justified, not that none exist.
 
 Configuration that got looser:
 
 ```sh
-git diff "$base"...HEAD -- '*eslint*' 'tsconfig*.json' 'pyproject.toml' 'setup.cfg' 'clippy.toml' '.github/workflows/*' 'foundry.toml' 'vitest.config.*' 'jest.config.*'
+git diff "$base" -- '*eslint*' ':(glob)**/tsconfig*.json' ':(glob)**/pyproject.toml' 'setup.cfg' 'clippy.toml' '.github/workflows/*' 'foundry.toml' 'vitest.config.*' 'jest.config.*'
 ```
 
 Look for disabled rules, `strict` options turned off, raised thresholds, removed CI steps, `continue-on-error`, narrowed test globs and reduced fuzz or invariant runs.
@@ -104,10 +111,10 @@ Look for disabled rules, `strict` options turned off, raised thresholds, removed
 ## Tests
 
 ```sh
-git diff --name-status "$base"...HEAD -- '*test*' '*spec*' 'test/' 'tests/'
-git diff -U0 "$base"...HEAD -- '*test*' '*spec*' | rg '^-' | rg -e 'expect|assert|should|toBe|toEqual|require\(|vm\.expect'
-git diff -U0 "$base"...HEAD | rg '^\+' | rg -e '\.(only|skip)\(' -e '\b(xit|xdescribe|xtest)\(' -e 'it\.todo' -e '@pytest\.mark\.(skip|xfail)' -e '#\[ignore\]' -e 'vm\.skip'
-git diff --name-only "$base"...HEAD -- '*__snapshots__*' '*.snap'
+git diff --name-status "$base" -- '*test*' '*spec*' 'test/' 'tests/'
+git diff -U0 "$base" -- '*test*' '*spec*' | rg '^-' | rg -e 'expect|assert|should|toBe|toEqual|require\(|vm\.expect'
+git diff -U0 "$base" | rg '^\+' | rg -e '\.(only|skip)\(' -e '\b(xit|xdescribe|xtest)\(' -e 'it\.todo' -e '@pytest\.mark\.(skip|xfail)' -e '#\[ignore\]' -e 'vm\.skip'
+git diff --name-only "$base" -- '*__snapshots__*' '*.snap'
 ```
 
 - The second command lists removed assertion lines. Each one needs a reason: the behavior it checked was deliberately changed, and a replacement assertion exists.

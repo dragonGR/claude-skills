@@ -20,8 +20,8 @@ A property that restates the implementation (`total == sum(price * qty)` copied 
 - **Generators too narrow.** `integers(min_value=0, max_value=100)` never reaches the overflow, the rounding edge or the limit. Generate across the full valid domain, and add explicit examples for known edges (zero, one minor unit, the cap, the cap plus one, the largest value the type holds).
 - **Filtering instead of constructing.** Heavy `assume(...)` or `.filter(...)` throws away most inputs, and the tool gives up or tests only easy cases. Build valid inputs directly (generate a list, then derive a valid index from it).
 - **Shared state across examples.** A pytest function-scoped fixture runs once per test function, not per generated example. Hypothesis reports this through the `function_scoped_fixture` health check; do not suppress it, create the state inside the test.
-- **Discarded counterexamples.** A failure found once and not kept will not be retried after the database directory is cleaned in CI. Copy each found counterexample into an explicit example (`@example`, a plain unit test) and commit proptest's `proptest-regressions` files.
-- **Non-reproducible CI failures.** Log the seed. Hypothesis defaults to `derandomize=True` on CI; fast-check prints a `seed` and `path` you can pass back to `fc.assert` to replay.
+- **Discarded counterexamples.** Hypothesis's built-in `ci` profile (active when `CI` is set) uses `derandomize=True`, no example database and `print_blob=True`. CI keeps nothing between runs and explores the same inputs every time, so copy each printed failing example into `@example` (or a plain unit test), and commit proptest's `proptest-regressions` files.
+- **Non-reproducible CI failures.** Log what replays the failure: Hypothesis's printed `@reproduce_failure` blob, or fast-check's `seed` and `path`, which you pass back to `fc.assert`.
 
 ## Hypothesis
 

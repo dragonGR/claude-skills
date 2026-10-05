@@ -51,6 +51,7 @@ py-spy top --pid "$PID"
 - `--subprocesses` is needed for gunicorn, uvicorn with workers, and multiprocessing, or you profile the idle parent process.
 - `--idle` includes threads that aren't running. Use it when the question is "why is it waiting". `--gil` shows only samples holding the GIL. `--native` adds C extension frames.
 - `dump` on a hung process is often faster than any profile.
+- py-spy reads CPython's internal structures, so every new Python minor version needs a py-spy release that knows its layout. 0.4.2 is the first that supports 3.14. When py-spy cannot read a process, compare the two versions before anything else.
 - Attaching needs ptrace: root or a relaxed `ptrace_scope` on Linux, `--cap-add SYS_PTRACE` in Docker (the `SYS_PTRACE` capability in Kubernetes), and sudo on macOS. Ask before changing security settings on a shared host.
 
 Python memory: `tracemalloc` shows where live allocations came from.
@@ -71,8 +72,8 @@ for stat in after.compare_to(before, "traceback")[:TOP_N]:
 ## Node.js
 
 ```bash
-node --cpu-prof --cpu-prof-dir=./profiles server.js          # writes .cpuprofile on exit; open in Chrome DevTools
-node --heap-prof --heap-prof-dir=./profiles server.js        # sampling heap profile on exit
+node --cpu-prof --cpu-prof-dir=./profiles server.js          # written only on a normal exit; open in Chrome DevTools
+node --heap-prof --heap-prof-dir=./profiles server.js        # sampling heap profile, same exit rule
 node --heapsnapshot-signal=SIGUSR2 server.js                 # `kill -USR2 <pid>` writes a heap snapshot
 node --heapsnapshot-near-heap-limit=3 server.js              # snapshots before an OOM
 0x -o server.js                                              # flame graph; Node 20+
@@ -80,7 +81,19 @@ node --heapsnapshot-near-heap-limit=3 server.js              # snapshots before 
 ```
 
 - `--cpu-prof` and `--heap-prof` are built in and stable in current Node LTS lines. They are the first choice because they need nothing installed.
-- Clinic.js (`clinic doctor`, `flame`, `bubbleprof`, `heapprofiler`) is no longer actively maintained, and its README warns that results may be inaccurate on current Node. Use it for a hint if it runs. Get the evidence from the built-in profilers or 0x.
+- Both write their file only when the process exits normally: the event loop empties or something calls `process.exit()`. A server stopped with Ctrl+C or SIGTERM and no handler for that signal dies without writing anything (on Node 26.10 it exits with 130 or 143 and the profile directory stays empty), so a ten-minute run under load is lost. Before a long run, check the server handles both signals by closing the listener and idle connections so the loop drains, the same shutdown nodejs-engineering describes:
+
+  ```js
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.once(signal, () => {
+      server.close();
+      server.closeIdleConnections();
+    });
+  }
+  ```
+
+  Stop the load generator before sending the signal, so open connections go idle. A fallback timer that calls `process.exit()` when the drain hangs still gets the profile written. 0x catches SIGINT and SIGTERM itself and writes the flame graph, so it needs none of this.
+- Clinic.js (`clinic doctor`, `flame`, `bubbleprof`, `heapprofiler`) is no longer actively maintained (the last release, 13.0.0, is from June 2023), and its README warns that results may be inaccurate on current Node. Use it for a hint if it runs. Get the evidence from the built-in profilers or 0x.
 - Leak hunting: take a snapshot after warm-up, run steady load, take a second, run more load, take a third. Objects allocated between the first and second snapshots that are still retained in the third are the suspects. Sort by retained size and follow the retainer path to the module-level `Map`, the listener that never gets removed, or the closure holding a request.
 - A heap snapshot blocks the event loop and needs about twice the current heap size in memory, so take one only on an instance out of rotation. Snapshots contain whatever was in memory: tokens, session data, personal data. Treat the files as secrets, keep them off shared drives and delete them when done.
 

@@ -75,7 +75,7 @@ let payout = u64::try_from(row.amount_cents)
 
 ### Async and Tokio
 
-Patterns, cancellation-safety table and shutdown template: `references/async-tokio.md`.
+Patterns, cancellation-safety table and shutdown template: [references/async-tokio.md](references/async-tokio.md).
 
 **Blocking the runtime.** `std::fs`, `std::net`, `std::thread::sleep`, a sync DB or HTTP client, password hashing, compression or large serde work inside `async fn` stalls every task scheduled on that worker: timers fire late, health checks fail, p99 jumps on unrelated endpoints. Blocking I/O goes to `spawn_blocking`; sustained CPU work goes to rayon or a dedicated thread pool, bounded by a semaphore. `spawn_blocking` work cannot be aborted, and runtime shutdown waits for it. `Runtime::block_on` inside an async context panics.
 
@@ -134,7 +134,7 @@ If one unit can outlast the shutdown grace period, give its external call a time
 
 Also: a `select!` loop that creates `sleep(period)` each iteration restarts the timer whenever another branch fires, so a heartbeat or overall deadline never triggers under steady traffic. Create the `interval` or deadline once, outside the loop (pin a `Sleep` and select on `&mut deadline`). `tokio::time::timeout` cancels by dropping too, so the same rules apply to anything it wraps.
 
-**No timeout.** reqwest has no total, read or connect timeout by default and follows up to 10 redirects, and a raw `TcpStream` read waits forever. Check the default of every client and pool you use, and set timeouts from config. A timeout is an unknown outcome: the server may have applied the write. Retry only with an idempotency key or after reconciling. A timeout also cannot fire while the wrapped future runs CPU work without yielding.
+**No timeout.** reqwest has no total, read or connect timeout by default and follows up to 10 redirects, and a raw `TcpStream` read waits forever. Check the default of every client and pool you use, and set timeouts from config. A timeout is an unknown outcome: the server may have applied the write. Retry only with an idempotency key or after reconciling. A timeout also cannot fire while the wrapped future runs CPU work without yielding. A timed-out `tokio::process::Command` keeps running. `timeout(d, cmd.output())` drops the `Child` without killing it, because `kill_on_drop` defaults to false, and `timeout(d, child.wait())` leaves the handle alive and the process untouched. Set `kill_on_drop(true)` and, on timeout, call `child.kill().await`, which sends SIGKILL and reaps the child. Only the direct child dies; processes it started keep running unless you kill its process group.
 
 **Unbounded queues.** `mpsc::unbounded_channel`, a growing `Vec` of pending work, or `tokio::spawn` per incoming message lets a fast producer grow memory until the OOM killer arrives. Use `mpsc::channel(capacity)` with capacity from config (it panics on 0): inside a pipeline `send().await` applies backpressure; at the edge, `try_send` and shed load with 429 or 503. A `broadcast` receiver that falls behind gets `RecvError::Lagged(n)` and has lost `n` messages; handle it rather than treating it as closed.
 
@@ -142,7 +142,7 @@ Also: a `select!` loop that creates `sleep(period)` each iteration restarts the 
 
 **Interval bursts.** `tokio::time::interval` completes its first tick immediately, and its default `MissedTickBehavior::Burst` fires every missed tick back to back after a stall or a slow iteration. A poller that calls a rate-limited API then sends a burst of calls. Set `MissedTickBehavior::Delay` or `Skip`.
 
-**`Send` surprises.** An `Rc`, `RefCell` borrow, `MutexGuard` or other `!Send` value alive across an await makes the whole future `!Send`, and `tokio::spawn` or an axum handler rejects it with a long error. Drop the value in an inner block before the await. Never add `unsafe impl Send` to silence the error. `async fn` in a public trait cannot promise a `Send` future (the compiler warns); use `#[trait_variant::make]` or write `fn f(&self) -> impl Future<Output = T> + Send`. Traits with `async fn` are not dyn-compatible; `Box<dyn Trait>` needs boxed futures.
+**`Send` surprises.** An `Rc`, `RefCell` borrow, `MutexGuard` or other `!Send` value alive across an await makes the whole future `!Send`, and `tokio::spawn` or an axum handler rejects it with a long error. Drop the value in an inner block before the await. Never add `unsafe impl Send` to silence the error. `async fn` in a public trait cannot promise a `Send` future (the compiler warns); use `#[trait_variant::make(Send)]` (or `make(SendName: Send)` to keep the local trait and generate a `Send` twin) or write `fn f(&self) -> impl Future<Output = T> + Send`. The bare `#[trait_variant::make]` compiles but adds no bound, so the trait still makes no `Send` promise. Traits with `async fn` are not dyn-compatible; `Box<dyn Trait>` needs boxed futures.
 
 ### Shared state, locks and Drop
 
@@ -179,7 +179,7 @@ Edition 2021 `if let ... else` behaves the same way (the `else` runs with the gu
 
 ### Unsafe and FFI
 
-Templates, FFI boundary patterns and Miri usage: `references/unsafe-ffi.md`.
+Templates, FFI boundary patterns and Miri usage: [references/unsafe-ffi.md](references/unsafe-ffi.md).
 
 **`unsafe` without a stated invariant.** Every `unsafe` block gets a `// SAFETY:` comment naming the precondition and where it is upheld; every `unsafe fn` gets a `# Safety` doc section. Clippy `undocumented_unsafe_blocks` enforces the comment. If you cannot write the comment, the block is probably unsound.
 
@@ -197,7 +197,7 @@ Templates, FFI boundary patterns and Miri usage: `references/unsafe-ffi.md`.
 
 ### Serde, errors and logging
 
-Parsing templates for frames, bodies, strings, paths and PATCH payloads: `references/untrusted-input.md`.
+Parsing templates for frames, bodies, strings, paths and PATCH payloads: [references/untrusted-input.md](references/untrusted-input.md).
 
 **Unknown fields accepted.** Serde ignores unknown keys by default in JSON, so `"requireMfa"` sent to a struct expecting `require_mfa` is dropped silently and the default applies. Privileged and configuration payloads get `#[serde(deny_unknown_fields)]`, which does not work together with `#[serde(flatten)]`.
 
@@ -207,6 +207,8 @@ Parsing templates for frames, bodies, strings, paths and PATCH payloads: `refere
 
 **Errors that erase context.** `.map_err(|_| Error::Internal)`, `.ok()?`, `Result<T, String>`, `Box<dyn Error>` built from `format!`. The cause chain is gone and callers cannot match. Libraries expose `thiserror` enums with `#[source]` or `#[from]`; applications add `anyhow` `.context(...)` at each layer and log with `{:#}` or `{:?}` (plain `{}` prints only the outermost message). A blanket `impl From<sqlx::Error> for ApiError` that maps everything to 500 turns "not found" and "unique violation" into retryable server errors; classify at the call site that knows what the error means. Clients get a stable error code, never the inner message.
 
+**SQL built with `format!`.** sqlx's `query!` and `query_as!` macros take only literals and check binds at compile time, which makes all sqlx code look injection-proof. The runtime functions are not. In sqlx 0.8, `sqlx::query(&format!("... ORDER BY {sort}"))` compiles. sqlx 0.9 rejects any string that is not `&'static str` unless it is wrapped in `AssertSqlSafe(...)`, so in 0.9 code each `AssertSqlSafe` is an author's claim to check. `QueryBuilder::push` appends raw text in both versions, and diesel's `sql_query(format!(...))` has the same hole. Bind values with `.bind()` or `push_bind`, and map sort columns and other identifiers through a `match` to fixed `&'static str` fragments.
+
 **Secrets in `Debug` and spans.** `#[derive(Debug)]` on a config or credentials struct prints the secret in every `{:?}` and panic message. `#[tracing::instrument]` records every argument, using `Debug` for non-primitive types, so a password or token parameter lands in the logs. Use `skip(...)` or `skip_all` plus explicit `fields(...)`, and wrap secrets in a type whose `Debug` redacts. Compare MACs and tokens in constant time (`subtle`).
 
 **Hasher and iteration-order assumptions.** std `HashMap` uses randomly seeded SipHash-1-3 and resists HashDoS; a map keyed by user input is fine as is. Swapping in FxHash or another unkeyed fast hasher for attacker-chosen keys brings collision floods back. Iteration order is arbitrary and differs per process, so hashing, signing or caching a serialized `HashMap`, snapshot tests, and "take the first entry" logic break across instances. Use `BTreeMap`, sort, or `IndexMap` when order matters.
@@ -215,7 +217,7 @@ Parsing templates for frames, bodies, strings, paths and PATCH payloads: `refere
 
 ### Cargo, features and supply chain
 
-Lint config, CI commands and `deny.toml`: `references/cargo-and-supply-chain.md`.
+Lint config, CI commands and `deny.toml`: [references/cargo-and-supply-chain.md](references/cargo-and-supply-chain.md).
 
 **Untested feature combinations.** Cargo builds each dependency with the union of features requested anywhere in the build, and building several workspace members together unifies their dependencies' features. A crate that forgot to enable `tokio/fs` compiles in `cargo build --workspace` because another member enables it, then fails for `cargo build -p crate` or a downstream user. Features must be additive. `--all-features` alone proves little; run `cargo hack check --each-feature` (or `--feature-powerset --depth 2`), which checks each package separately and includes `--no-default-features`.
 
@@ -252,6 +254,7 @@ Lint config, CI commands and `deny.toml`: `references/cargo-and-supply-chain.md`
 - Is I/O cleanup explicit (flush, close, `sync_all`) rather than left to `Drop`?
 - Does every `unsafe` block have a SAFETY comment that names a real, upheld invariant, and are FFI exports wrapped in `catch_unwind` with null and length checks?
 - Do privileged serde types deny unknown fields, avoid fail-open defaults, and avoid `untagged` for behavior selection?
+- Does any SQL text (`format!`, `AssertSqlSafe`, `QueryBuilder::push`, `sql_query`) carry input instead of a bind?
 - Do errors keep their source chain, and do clients see only stable codes?
 - Can any secret reach a `Debug` impl, a panic message or a `#[instrument]` span?
 - Does anything depend on `HashMap` iteration order, or use an unkeyed hasher on attacker keys?
@@ -259,9 +262,9 @@ Lint config, CI commands and `deny.toml`: `references/cargo-and-supply-chain.md`
 
 ## References
 
-- `references/async-tokio.md`: read when writing or reviewing Tokio code: select loops, cancellation safety, timeouts, task supervision, graceful shutdown, channels, blocking work, actors.
-- `references/unsafe-ffi.md`: read before writing or reviewing `unsafe`, FFI exports or imports, raw pointers, `MaybeUninit`, or when running Miri and sanitizers.
-- `references/untrusted-input.md`: read when parsing bytes, request bodies, serde payloads, strings, numbers, file paths or regexes that come from outside the process.
-- `references/cargo-and-supply-chain.md`: read when setting up lints, CI, feature flags, MSRV, `cargo deny`, or adding a dependency with a build script or proc macro.
+- [references/async-tokio.md](references/async-tokio.md): read when writing or reviewing Tokio code: select loops, cancellation safety, timeouts, task supervision, graceful shutdown, channels, blocking work, actors.
+- [references/unsafe-ffi.md](references/unsafe-ffi.md): read before writing or reviewing `unsafe`, FFI exports or imports, raw pointers, `MaybeUninit`, or when running Miri and sanitizers.
+- [references/untrusted-input.md](references/untrusted-input.md): read when parsing bytes, request bodies, serde payloads, strings, numbers, file paths or regexes that come from outside the process.
+- [references/cargo-and-supply-chain.md](references/cargo-and-supply-chain.md): read when setting up lints, CI, feature flags, MSRV, `cargo deny`, or adding a dependency with a build script or proc macro.
 
-Related skills: security-engineering for authorization and threat modelling; backend-architecture for idempotency, retries and reconciliation; database-engineering for transactions and locking; test-engineering for test strategy and fuzzing plans; performance-benchmarking before optimizing.
+Related skills: security-engineering for authorization and threat modeling; backend-architecture for idempotency, retries and reconciliation; database-engineering for transactions and locking; test-engineering for test strategy and fuzzing plans; performance-benchmarking before optimizing.

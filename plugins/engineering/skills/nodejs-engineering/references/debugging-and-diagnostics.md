@@ -71,7 +71,7 @@ node inspect 127.0.0.1:9229
 
 If you leave `node inspect` while the target is paused, the target stays paused. Continue or kill it before you quit.
 
-## Probe mode (Node 24.16 and later)
+## Probe mode (Node 24.16+ or 26.1+)
 
 Probe mode starts the script, evaluates expressions every time execution reaches a location, prints the values and exits. There is no interactive session, which makes it the right tool from scripts, CI and AI agents.
 
@@ -81,7 +81,7 @@ node inspect --probe app.js:42 --expr 'order.total' --cond 'order.total < 0' --m
 node inspect --json --probe app.js:42 --expr 'order' --preview -- app.js
 ```
 
-`--cond` (24.20 and later) records a hit only when the condition is truthy; `--max-hit` (24.19 and later) stops after that many hits. Probe mode launches a new process from the entry script; it does not attach to a running one.
+`--cond` (24.20+ or 26.6+) records a hit only when the condition is truthy; `--max-hit` (24.19+ or 26.4+) stops after that many hits. Node 22 has no probe mode. Probe mode launches a new process from the entry script; it does not attach to a running one.
 
 ## Chrome DevTools and IDEs
 
@@ -103,9 +103,10 @@ Run a single test file in a single worker, paused before the first line, then at
 node --inspect-brk ./node_modules/vitest/vitest.mjs run --no-file-parallelism src/orders.test.ts
 node --inspect-brk ./node_modules/jest/bin/jest.js --runInBand src/orders.test.ts
 node --inspect-brk --test --test-isolation=none src/orders.test.js
+node --inspect-brk --test --experimental-test-isolation=none src/orders.test.js   # Node 22
 ```
 
-`--test-isolation=none` runs the test files in the runner's own process so the debugger sees them. It exists from Node 22.8; before 23.6 it was called `--experimental-test-isolation`.
+`--test-isolation=none` runs the test files in the runner's own process so the debugger sees them. Node 23.6 renamed it from `--experimental-test-isolation`, and Node 22 still only accepts the old name.
 
 A pool of workers each with its own inspector is not worth fighting. If the failure only shows under parallel runs, that is a shared-state or ordering bug: look for module-level state, shared database rows and real timers before reaching for the debugger.
 
@@ -183,4 +184,4 @@ await Debugger.setBreakpointByUrl({ urlRegex: TARGET_URL_PATTERN, lineNumber: TA
 await Runtime.runIfWaitingForDebugger();
 ```
 
-CDP line numbers are zero-based, which is why the script subtracts one. On Node 24.16 or later, probe mode usually does the same job without a script.
+CDP line numbers are zero-based, which is why the script subtracts one. On Node 24.16+ or 26.1+, probe mode usually does the same job without a script.

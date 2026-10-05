@@ -1,6 +1,6 @@
 # State and async patterns
 
-Read this when writing or reviewing effects, data fetching, TanStack Query keys and mutations, optimistic updates, Zustand stores, forms, URL state, list rendering or anything that can be clicked twice. Examples use React 19, TanStack Query v5, Zustand 5 and React Router 7. `apiFetch` is the app's fetch wrapper (see `security-boundaries.md`).
+Read this when writing or reviewing effects, data fetching, TanStack Query keys and mutations, optimistic updates, Zustand stores, forms, URL state or anything that can be clicked twice. Examples use React 19, TanStack Query v5, Zustand 5 and React Router 8 (imports from `react-router`). `apiFetch` is the app's fetch wrapper (see `security-boundaries.md`).
 
 ## Effect races
 
@@ -149,19 +149,6 @@ export const usePreferencesStore = create<PreferencesState>()(
 - Zustand 5's `persist` no longer writes the initial state to storage at creation.
 - Stores are module singletons. Reset user-scoped stores on sign-out, and reset stores between tests.
 
-## Derived values and resets
-
-```tsx
-// Before: an extra render with stale output, and a bug if anything else sets `visible`.
-const [visible, setVisible] = useState<Todo[]>([])
-useEffect(() => setVisible(todos.filter((t) => t.status === filter)), [todos, filter])
-
-// After
-const visible = todos.filter((t) => t.status === filter)
-```
-
-Memoize only when the Profiler shows the computation is expensive. To reset a subtree's state when an identity changes, change its `key`; do not clear fields in an effect.
-
 ## Query keys and invalidation
 
 Every value the `queryFn` reads belongs in the `queryKey`. A key factory keeps reads and invalidations in the same shape:
@@ -258,9 +245,15 @@ export function StarButton({ orgId, projectId, starred }: StarButtonProps) {
   async function toggle() {
     setFailed(false)
     setOptimisticStarred(!starred)
-    const res = await apiFetch(`/projects/${encodeURIComponent(projectId)}/star`, {
-      method: starred ? 'DELETE' : 'PUT',
-    })
+    let res: Response
+    try {
+      res = await apiFetch(`/projects/${encodeURIComponent(projectId)}/star`, {
+        method: starred ? 'DELETE' : 'PUT',
+      })
+    } catch {
+      setFailed(true)
+      return
+    }
     if (!res.ok) {
       setFailed(true)
       return
@@ -277,7 +270,7 @@ export function StarButton({ orgId, projectId, starred }: StarButtonProps) {
 }
 ```
 
-`starred` comes from the project query. Awaiting `invalidateQueries` keeps the Action pending until the refetch settles, so the optimistic value is replaced by real data rather than flicking back first. Calling the optimistic setter outside an Action or `startTransition` makes React warn and show the value only briefly. When an Action sets ordinary React state after an `await`, wrap that update in another `startTransition`; React does not carry the transition across `await`.
+`starred` comes from the project query. `fetch` rejects on a dropped connection, and an error thrown from a `<form action>` function goes to the nearest error boundary, so without the `try` one network blip replaces the route with the error page. Awaiting `invalidateQueries` keeps the Action pending until the refetch settles, so the optimistic value is replaced by real data rather than flicking back first. Calling the optimistic setter outside an Action or `startTransition` makes React warn and show the value only briefly. State set after an `await` is not part of the transition, because React does not carry it across `await`; that is fine for an error flag, but wrap the update in `startTransition` when it should render together with the Action's result.
 
 ## Double submit and idempotency
 
@@ -352,30 +345,6 @@ useEffect(() => {
 Effect Events are declared in the same component or hook as their effect, called only from effects, and never listed as dependencies; `eslint-plugin-react-hooks` at a current version knows the rules. On older React, keep the latest value in a ref updated in an effect.
 
 Silencing `react-hooks/exhaustive-deps` is almost always hiding one of these bugs.
-
-## Controlled inputs
-
-```tsx
-// Before: uncontrolled while loading (value undefined), controlled afterwards.
-<input value={profile?.displayName} onChange={onChange} />
-
-// After
-<input value={profile?.displayName ?? ''} onChange={onChange} />
-```
-
-Pick one model per field. Uncontrolled inputs with `defaultValue` and `FormData` on submit are fine and cheaper; changing `defaultValue` later does nothing, so reset them with `key`.
-
-## List keys
-
-```tsx
-// Before: deleting row 1 moves row 2's half-typed rename into row 1.
-{rows.map((row, i) => <EditableRow key={i} row={row} />)}
-
-// After
-{rows.map((row) => <EditableRow key={row.id} row={row} />)}
-```
-
-Index keys are safe only for static lists that never reorder, filter, insert or delete and whose rows hold no state. For client-created rows without server ids, assign an id when the row is created, not during render.
 
 ## Loading, error and empty
 

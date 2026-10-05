@@ -14,6 +14,8 @@ import { useGSAP } from '@gsap/react'
 gsap.registerPlugin(ScrollTrigger, useGSAP)
 ```
 
+Every plugin, SplitText, ScrollSmoother, MorphSVG and DrawSVG included, ships in the public `gsap` package under the no-charge standard license since 3.13 (April 2025). Import them from `gsap/SplitText` and the like; never install `gsap-trial` or add a private Club registry for them.
+
 `useGSAP` runs in a layout effect, wraps the callback in a `gsap.context()`, scopes selector strings to the `scope` ref, and reverts everything created inside it on unmount: tweens, timelines, ScrollTriggers, Draggables and SplitText. Signatures:
 
 ```ts
@@ -143,13 +145,7 @@ Triggers are calculated in creation order. React mounts components in tree order
 
 ## Mobile
 
-Mobile browser toolbars resize the viewport as the user scrolls, which triggers refreshes mid-scroll and makes pinned sections jump.
-
-```ts
-ScrollTrigger.config({ ignoreMobileResize: true })
-```
-
-With that set, vertical resizes of up to a quarter of the viewport height on touch-only devices do not trigger a refresh; start and end positions may then be slightly off, which is usually better than the jump. Size pinned sections with `svh` so their height does not depend on toolbar state. `ScrollTrigger.normalizeScroll(true)` moves scrolling onto the JavaScript thread, which stops the address bar showing and hiding on most mobile browsers and keeps pins in sync with repaints, but GSAP calls it experimental, it hands control back to the browser during multi-touch and after a pinch zoom, and it changes how scrolling feels. Use it only after the steps above failed on a real device, and re-test keyboard and assistive-technology scrolling afterwards.
+Mobile browser toolbars resize the viewport as the user scrolls, which triggers refreshes mid-scroll and makes pinned sections jump. ScrollTrigger handles most of this by default: on touch-only devices `ignoreMobileResize` is on, so a height change under a quarter of the viewport with an unchanged width does not trigger a refresh. Start and end positions may then be slightly off, which is usually better than the jump. `ScrollTrigger.config({ ignoreMobileResize: true })` changes nothing on those devices and has no effect on others, so its absence is not a finding. Size pinned sections with `svh` so their height does not depend on toolbar state. `ScrollTrigger.normalizeScroll(true)` moves scrolling onto the JavaScript thread, which stops the address bar showing and hiding on most mobile browsers and keeps pins in sync with repaints, but GSAP calls it experimental, it hands control back to the browser during multi-touch and after a pinch zoom, and it changes how scrolling feels. Use it only after the steps above failed on a real device, and re-test keyboard and assistive-technology scrolling afterwards.
 
 ## Pinning and CSS
 
@@ -171,5 +167,5 @@ With that set, vertical resizes of up to a quarter of the viewport height on tou
 - Does content that changes size after mount either reserve its space or trigger one `refresh()`?
 - Are triggers created in page order, or ordered with `refreshPriority` or `sort()`?
 - Is every scene inside `gsap.matchMedia()` with a reduced-motion condition and a usable CSS fallback?
-- Is `ignoreMobileResize` set and has the scene been scrolled on a real phone?
+- Are pinned sections sized with `svh`, and has the scene been scrolled on a real phone?
 - Is there any transformed ancestor or flex container around a pin?

@@ -73,18 +73,18 @@ The parts always sum to the total. Tie-breaking order must be deterministic so a
 ```python
 # Before
 now = datetime.utcnow()                                             # naive, deprecated since 3.12
-created = datetime.fromtimestamp(event["created"]).replace(tzinfo=timezone.utc)  # local time relabelled
+created = datetime.fromtimestamp(event["created"]).replace(tzinfo=timezone.utc)  # local time relabeled
 
 # After
 now = datetime.now(timezone.utc)
 created = datetime.fromtimestamp(event["created"], tz=timezone.utc)
 ```
 
-`fromtimestamp` without `tz` returns local wall time. On a host set to UTC the relabelled version happens to be right, which is why this bug survives until the code runs on a laptop, a VM with a local zone, or a container whose `TZ` someone set.
+`fromtimestamp` without `tz` returns local wall time. On a host set to UTC the relabeled version happens to be right, which is why this bug survives until the code runs on a laptop, a VM with a local zone, or a container whose `TZ` someone set.
 
 - Naive vs aware ordering (`<`, `>`) raises `TypeError`. Equality between them is always `False`, silently: dedupe keys and "already processed?" checks never match.
 - `.astimezone()` and `.timestamp()` on a naive value assume local time.
-- `datetime.fromisoformat` accepts a trailing `Z` only from 3.11. On older versions it raises, and code that "fixes" this by stripping the `Z` produces a naive value.
+- `datetime.fromisoformat` accepts a trailing `Z` (3.11+). Older code often strips the `Z` before parsing to work around the pre-3.11 error, which produces a naive value; delete the workaround.
 - `date.today()` is the local date. Business dates ("which day's report", "which invoice month") come from an aware timestamp converted to the business's zone: `ts.astimezone(ZoneInfo(tenant.tz)).date()`.
 - Pydantic v2 `AwareDatetime` rejects naive input at the boundary.
 - Epoch units: JavaScript and many APIs send milliseconds; Python's `fromtimestamp` takes seconds. Put the unit in the field name (`created_at_ms`) and convert once.

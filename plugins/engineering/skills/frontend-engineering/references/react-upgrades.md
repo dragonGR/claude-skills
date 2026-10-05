@@ -52,6 +52,8 @@ Fix these type errors properly. Loosening `strict`, adding `any` or `@ts-expect-
 
 React 19.2 adds `useEffectEvent` and `<Activity>`. Upgrade `eslint-plugin-react-hooks` with it, or the linter tries to add Effect Events to dependency arrays. `<Activity mode="hidden">` keeps a subtree's state while unmounting its effects, which can replace hand-rolled "keep the tab mounted but hidden" code; effects in the hidden subtree stop until it is visible again, so anything that must keep running (a pending transaction watcher) does not belong there.
 
+React 19.3 adds `<ViewTransition>` and `addTransitionType` for View Transition animations, refs on `<Fragment>`, and `browser()` in `react-dom`, which marks a subtree browser-only during server rendering or prerendering (see `vite-build-and-deploy.md`). Separate transitions now render independently, so a slow one no longer holds back an unrelated one.
+
 ## React Router 6 to 7
 
 Requirements: Node 20, React 18 and React DOM 18 or later.
@@ -70,6 +72,7 @@ v8 requires Node 22.22 or later and React and React DOM 19.2.7 or later. For dat
 - The `react-router-dom` package is gone. Import everything from `react-router`, and `RouterProvider` from `react-router/dom`, then uninstall `react-router-dom`.
 - Middleware is always on in v8. If the app adopted it on v7, it ran behind `future.v8_middleware`; enable that flag on v7 first and test.
 - `useMatches()` entries expose `loaderData` instead of `data`.
+- `react-router` is published as ESM only. Node's own `require()` loads it on the Node versions v8 supports, but a test runner with its own CommonJS module system may not: Jest in CommonJS mode fails on the `import` syntax unless it transforms the package or is a version that falls back to `require(esm)` (30.4 and later on Node 24.9 and later). Run the test suite against v8 before merging; Vitest loads it as is.
 
 The remaining v8 flags (`v8_splitRouteModules`, `v8_viteEnvironmentApi`, `v8_passThroughRequests`, `v8_trailingSlashAwareDataRequests`) concern framework mode and server request handling; an SPA using `createBrowserRouter` or `<BrowserRouter>` does not need them.
 
@@ -102,7 +105,7 @@ The renamed `isLoading` is the trap: code that kept `if (isLoading) return <Spin
 
 Code that used query-level `onSuccess` to copy data into state or a store should not be ported to an effect that does the same thing; read the query data where it is needed (see `state-and-async.md`).
 
-TanStack ships a codemod for the overload removal. Within v5, recent minors deprecate `ensureQueryData`, `fetchQuery` and `prefetchQuery` in favor of `queryClient.query`; follow the installed version.
+TanStack ships a codemod for the overload removal. Within v5, 5.102 and later deprecate `ensureQueryData`, `fetchQuery` and `prefetchQuery` in favor of `queryClient.query`. The mapping is not a rename: `ensureQueryData(opts)` becomes `query({ ...opts, staleTime: 'static' })` (without it, `query` refetches stale data on every call), `fetchQuery(opts)` becomes `query(opts)`, and `prefetchQuery(opts)` becomes `query(opts).catch(noop)`.
 
 ## Zustand 4 to 5
 

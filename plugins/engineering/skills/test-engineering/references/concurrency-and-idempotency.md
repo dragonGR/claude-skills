@@ -219,24 +219,28 @@ An idempotency key is only as good as the tests of its edge cases. The sequentia
 | --- | --- |
 | Same key, same body, sequential | Stored response returned; one side effect |
 | Same key, same body, concurrent | One side effect; others get the stored response or an "in progress" conflict |
-| Same key, different body | Rejected; original operation untouched |
+| Same key, different request (body or path) | Rejected; original operation untouched |
 | Same key, different user | Keys are scoped per caller; no collision, no leak of the other user's response |
-| Provider applied the charge, response lost, client retries | One charge at the provider |
+| Provider applied the charge, response lost, client retries | One charge at the provider, for the amount on the order |
 | No key on an endpoint that requires one | Rejected before any side effect |
 
 The provider fake must implement the provider's own idempotency (dedupe by the key header), or the lost-response test cannot tell a correct retry from a double charge. Parse request bodies with the production schema so the fake rejects what the real provider would. The example uses the MSW 3 API; `real-dependencies.md` lists the MSW 2 names.
 
 ```ts
+import { randomUUID } from "node:crypto";
+import { HttpNetworkFrame } from "msw/experimental";
 import { http, HttpResponse } from "msw/http";
 import { setupServer } from "msw/node";
 import supertest from "supertest";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from "vitest";
 import { app } from "../src/app";
+import { pool } from "../src/db";
 import { ChargeRequest } from "../src/provider/schema";
-import { testConfig } from "./support/config";
 import { tokenFor, users } from "./support/auth";
+import { testConfig } from "./support/config";
+import { createOrder } from "./support/factories";
 
-const ORDER_AMOUNT_CENTS = 2_500;
+const ORDER_AMOUNT_MINOR = 2_500;
 // supertest calls the app over loopback, and MSW intercepts those requests too.
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]", "localhost"]);
 
@@ -263,7 +267,8 @@ const server = setupServer(
 beforeAll(() =>
   server.listen({
     onUnhandledFrame({ frame, defaults }) {
-      if (frame.protocol === "http" && LOOPBACK_HOSTS.has(new URL(frame.data.request.url).hostname)) {
+      // MSW 3 types `frame` loosely; the instanceof check narrows it to an HTTP frame.
+      if (frame instanceof HttpNetworkFrame && LOOPBACK_HOSTS.has(new URL(frame.data.request.url).hostname)) {
         return;
       }
       defaults.error();
@@ -277,53 +282,75 @@ beforeEach(() => {
 afterEach(() => server.resetHandlers());
 afterAll(() => server.close());
 
-async function pay(user: keyof typeof users, key: string, orderId: string, amountCents = ORDER_AMOUNT_CENTS) {
+// The amount comes from the order row on the server, so the request carries no amount.
+async function pay(user: keyof typeof users, key: string, orderId: string) {
   return supertest(app)
-    .post("/payments")
+    .post(`/v1/orders/${orderId}/payments`)
     .set("Authorization", `Bearer ${await tokenFor(user)}`)
-    .set("Idempotency-Key", key)
-    .send({ orderId, amountCents });
+    .set("Idempotency-Key", key);
 }
 
 it("replays the stored result for a repeated key", async () => {
-  const first = await pay("alice", "key-1", "order-a");
-  const second = await pay("alice", "key-1", "order-a");
+  const orderId = await createOrder("alice", ORDER_AMOUNT_MINOR);
+  const key = randomUUID();
+  const first = await pay("alice", key, orderId);
+  const second = await pay("alice", key, orderId);
   expect(first.status).toBe(201);
   expect(second.status).toBe(201);
   expect(second.body).toEqual(first.body);
-  expect(providerCharges.size).toBe(1);
+  expect([...providerCharges.values()]).toEqual([ORDER_AMOUNT_MINOR]);
 });
 
 it("charges once when the same key arrives concurrently", async () => {
-  const responses = await Promise.all([1, 2, 3].map(() => pay("alice", "key-2", "order-b")));
+  const orderId = await createOrder("alice", ORDER_AMOUNT_MINOR);
+  const key = randomUUID();
+  const responses = await Promise.all([1, 2, 3].map(() => pay("alice", key, orderId)));
   for (const r of responses) expect([201, 409]).toContain(r.status);
   expect(providerCharges.size).toBe(1);
 });
 
-it("rejects a reused key with a different body", async () => {
-  await pay("alice", "key-3", "order-c");
-  const reused = await pay("alice", "key-3", "order-c", ORDER_AMOUNT_CENTS + 1);
+it("rejects a reused key on a different request", async () => {
+  const firstOrder = await createOrder("alice", ORDER_AMOUNT_MINOR);
+  const otherOrder = await createOrder("alice", ORDER_AMOUNT_MINOR);
+  const key = randomUUID();
+  await pay("alice", key, firstOrder);
+  const reused = await pay("alice", key, otherOrder);
   expect(reused.status).toBe(422);
   expect(reused.body.error.code).toBe("idempotency_key_reused");
   expect(providerCharges.size).toBe(1);
 });
 
 it("scopes keys per user", async () => {
-  const alice = await pay("alice", "shared-key", "order-d");
-  const bob = await pay("bob", "shared-key", "order-e");
+  const aliceOrder = await createOrder("alice", ORDER_AMOUNT_MINOR);
+  const bobOrder = await createOrder("bob", ORDER_AMOUNT_MINOR);
+  const sharedKey = randomUUID();
+  const alice = await pay("alice", sharedKey, aliceOrder);
+  const bob = await pay("bob", sharedKey, bobOrder);
   expect(bob.status).toBe(201);
-  expect(bob.body.orderId).toBe("order-e");
+  expect(bob.body.orderId).toBe(bobOrder);
   expect(bob.body.paymentId).not.toBe(alice.body.paymentId);
 });
 
 it("does not double charge when the provider response is lost", async () => {
+  const orderId = await createOrder("alice", ORDER_AMOUNT_MINOR);
+  const key = randomUUID();
   dropNextProviderResponse = true;
-  const first = await pay("alice", "key-4", "order-f");
-  expect(first.status).not.toBe(201);
-  const retry = await pay("alice", "key-4", "order-f");
+
+  const first = await pay("alice", key, orderId);
+  expect(first.status).toBe(503);
+  expect(Number(first.headers["retry-after"])).toBeGreaterThan(0);
+
+  // The unknown attempt keeps its lease, so a retry inside it must not start a second attempt.
+  const early = await pay("alice", key, orderId);
+  expect(early.status).toBe(409);
+
+  // Stands in for the client waiting out Retry-After. The lease is compared with the
+  // database clock, which fake timers cannot move.
+  await pool.query("UPDATE idempotency_keys SET locked_until = now() WHERE idempotency_key = $1", [key]);
+  const retry = await pay("alice", key, orderId);
   expect(retry.status).toBe(201);
-  expect(providerCharges.size).toBe(1);
+  expect([...providerCharges.values()]).toEqual([ORDER_AMOUNT_MINOR]);
 });
 ```
 
-The status codes and error code are this example's contract; use your API's. The "concurrent" case accepts either 201 (stored result) or 409 (still in progress) because both are correct designs; what must never vary is the single provider charge. The lost-response case only passes if the service reuses one provider idempotency key per operation, derived from stored state, rather than generating a fresh key per attempt.
+The status codes and error code are this example's contract; use your API's. The "concurrent" case accepts either 201 (stored result) or 409 (still in progress) because both are correct designs; what must never vary is the single provider charge. The lost-response case follows the handler in backend-architecture's `references/idempotency.md`: an unknown outcome answers 503 with `Retry-After` and keeps the key's lease, a retry inside the lease gets 409, and the retry after it takes the key over and calls the provider again with the same stored provider key, which returns the original charge. It passes only if the service derives that provider key from stored state rather than generating a fresh one per attempt, and takes the amount from the order rather than the request.
